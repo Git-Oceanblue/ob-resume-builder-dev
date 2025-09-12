@@ -35,7 +35,7 @@ async def stream_resume_processing_endpoint(file: UploadFile = File(...)):
             temp_file.write(content)
 
         try:
-            # Extract text from file - no timeout worries with Function URLs!
+            # Extract text from file - no timeout worries with Function URLs
             extracted_text = extract_text_from_file(temp_file_path)
 
 
