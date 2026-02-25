@@ -78,11 +78,76 @@ const GeneratedResume = ({ resumeData }) => {
 
   const escapeRegExp = (value = '') => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+  // Strip any leading bullet character (•, -, *, ●, ◦, etc.) from parsed text
+  // so that we never end up with double bullets when we add our own bullet marker.
+  const stripBullet = (text = '') =>
+    text.replace(/^[\u2022\u25CF\u25E6\u2023\u2043\u2219\u00B7\u25CB\u25AA\u25B8\-\u2013\u2014*]\s*/, '').trim();
+
+  // ─────────────────────────────────────────────────────────────
+  // LOCATION LOOKUP TABLES  (module-level equivalent inside component)
+  //   Indian state/UT names — to detect India when "India" word is absent
+  //   US state 2-letter abbreviation set
+  //   US full state name → 2-letter abbreviation map
+  // ─────────────────────────────────────────────────────────────
+  const INDIA_STATES = new Set([
+    'andhra pradesh','arunachal pradesh','assam','bihar','chhattisgarh',
+    'goa','gujarat','haryana','himachal pradesh','jharkhand','karnataka',
+    'kerala','madhya pradesh','maharashtra','manipur','meghalaya',
+    'mizoram','nagaland','odisha','orissa','punjab','rajasthan',
+    'sikkim','tamil nadu','telangana','tripura','uttar pradesh',
+    'uttarakhand','uttaranchal','west bengal',
+    'delhi','ncr','chandigarh','puducherry','pondicherry',
+    'jammu and kashmir','ladakh','lakshadweep',
+  ]);
+
+  const US_STATE_ABBREVS = new Set([
+    'AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA','HI','ID','IL','IN','IA',
+    'KS','KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ',
+    'NM','NY','NC','ND','OH','OK','OR','PA','RI','SC','SD','TN','TX','UT','VT',
+    'VA','WA','WV','WI','WY','DC',
+  ]);
+
+  const US_STATE_NAME_MAP = {
+    'Alabama':'AL','Alaska':'AK','Arizona':'AZ','Arkansas':'AR','California':'CA',
+    'Colorado':'CO','Connecticut':'CT','Delaware':'DE','Florida':'FL','Georgia':'GA',
+    'Hawaii':'HI','Idaho':'ID','Illinois':'IL','Indiana':'IN','Iowa':'IA',
+    'Kansas':'KS','Kentucky':'KY','Louisiana':'LA','Maine':'ME','Maryland':'MD',
+    'Massachusetts':'MA','Michigan':'MI','Minnesota':'MN','Mississippi':'MS',
+    'Missouri':'MO','Montana':'MT','Nebraska':'NE','Nevada':'NV',
+    'New Hampshire':'NH','New Jersey':'NJ','New Mexico':'NM','New York':'NY',
+    'North Carolina':'NC','North Dakota':'ND','Ohio':'OH','Oklahoma':'OK',
+    'Oregon':'OR','Pennsylvania':'PA','Rhode Island':'RI','South Carolina':'SC',
+    'South Dakota':'SD','Tennessee':'TN','Texas':'TX','Utah':'UT','Vermont':'VT',
+    'Virginia':'VA','Washington':'WA','West Virginia':'WV','Wisconsin':'WI',
+    'Wyoming':'WY','District of Columbia':'DC',
+  };
+
+  /**
+   * resolveUSStateAbbrev
+   * Given a single location segment string, returns the 2-letter US state
+   * abbreviation if the segment matches either an abbreviation or a full
+   * state name. Returns null otherwise.
+   */
+  const resolveUSStateAbbrev = (segment = '') => {
+    const trimmed = segment.trim();
+    // Already a 2-letter abbreviation?
+    const upper = trimmed.toUpperCase();
+    if (US_STATE_ABBREVS.has(upper)) return upper;
+    // Full state name (case-insensitive)?
+    const lc = trimmed.toLowerCase();
+    const found = Object.entries(US_STATE_NAME_MAP).find(
+      ([name]) => name.toLowerCase() === lc
+    );
+    return found ? found[1] : null;
+  };
+
   // ─────────────────────────────────────────────────────────────
   // CENTRALIZED HELPER: formatEmploymentLocation
-  //   India  → "City, India"          (no state)
-  //   USA    → "City, State"          (no country)
+  //   India  → "India"                 (country only)
+  //   USA    → state abbreviation      (e.g. "OH")
   //   Other  → original string
+  //   Handles: "City, ST", "City, FullState", "City, FullState, ZIP",
+  //            "City, FullState, USA", "City, India"
   //   Used in BOTH DOCX generation AND the on-screen preview
   // ─────────────────────────────────────────────────────────────
   const formatEmploymentLocation = (locationString = '') => {
@@ -90,39 +155,26 @@ const GeneratedResume = ({ resumeData }) => {
     const normalized = raw.replace(/\s+/g, ' ').trim();
     if (!normalized) return '';
 
-    const parts = normalized
-      .split(',')
-      .map(part => part.trim())
-      .filter(Boolean);
+    const parts = normalized.split(',').map(p => p.trim()).filter(Boolean);
 
-    const isUSCountry = (value = '') => /\b(united states|united states of america|usa|u\.s\.a\.|us|u\.s\.)\b/i.test(value);
-    const isIndiaCountry = (value = '') => /\bindia\b/i.test(value);
+    // India → "India" only
+    // Detect by the word "India" OR by any Indian state / UT name
+    const isIndia = parts.some(p => /\bindia\b/i.test(p)) ||
+                    parts.some(p => INDIA_STATES.has(p.toLowerCase()));
+    if (isIndia) return 'India';
 
-    // Check if India is present in any part
-    const hasIndia = parts.some(part => isIndiaCountry(part));
-    if (hasIndia) {
-      const city = parts[0] || '';
-      return city ? `${city}, India` : 'India';
+    // US → state abbreviation only
+    // Scan all segments for a recognisable state (abbrev or full name).
+    // Skip pure-numeric ZIP segments.
+    for (const part of parts) {
+      if (/^\d+$/.test(part)) continue; // skip ZIP codes
+      const abbrev = resolveUSStateAbbrev(part);
+      if (abbrev) return abbrev;
     }
 
-    // Check if USA is present in any part
-    const hasUS = parts.some(part => isUSCountry(part));
-    if (hasUS) {
-      const city = parts[0] || '';
-      let state = '';
-
-      // Determine state location based on position
-      if (parts.length >= 3 && isUSCountry(parts[parts.length - 1])) {
-        // Format: City, State, USA
-        state = parts[1] || '';
-      } else if (parts.length >= 2 && !isUSCountry(parts[1])) {
-        // Format: City, State (USA already filtered)
-        state = parts[1] || '';
-      }
-
-      if (city && state) return `${city}, ${state}`;
-      if (city) return city;
-      return normalized;
+    // Explicit USA/US country label but no state found
+    if (parts.some(p => /\b(united states of america|united states|usa|u\.s\.a\.|u\.s\.)\b/i.test(p))) {
+      return 'United States';
     }
 
     // For other countries, return as-is
@@ -131,18 +183,11 @@ const GeneratedResume = ({ resumeData }) => {
 
   // ─────────────────────────────────────────────────────────────
   // HELPER: getEducationCountry
-  //   Extracts only the country name from an education location string.
-  //   "Kakinada, India"   → "India"
-  //   "Tuscaloosa, AL"    → "United States"
-  //   "London, UK"        → "UK"
+  //   Extracts the abbreviated location for the education table.
+  //   India  → "India"
+  //   USA    → state abbreviation only  (e.g. "IL" for "Chicago, IL")
+  //   Other  → last comma-segment (country)
   // ─────────────────────────────────────────────────────────────
-  const US_STATE_ABBREVS = new Set([
-    'AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA','HI','ID','IL','IN','IA',
-    'KS','KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ',
-    'NM','NY','NC','ND','OH','OK','OR','PA','RI','SC','SD','TN','TX','UT','VT',
-    'VA','WA','WV','WI','WY','DC'
-  ]);
-
   const getEducationCountry = (location = '') => {
     const raw = typeof location === 'string' ? location : '';
     const normalized = raw.replace(/\s+/g, ' ').trim();
@@ -150,12 +195,20 @@ const GeneratedResume = ({ resumeData }) => {
 
     const parts = normalized.split(',').map(p => p.trim()).filter(Boolean);
 
+    // India → "India"
     if (parts.some(p => /\bindia\b/i.test(p))) return 'India';
 
-    if (parts.some(p =>
-      US_STATE_ABBREVS.has(p.toUpperCase()) ||
-      /\b(united states|usa|u\.s\.a?\.)\b/i.test(p)
-    )) return 'United States';
+    // US → state abbreviation only
+    for (const part of parts) {
+      if (/^\d+$/.test(part)) continue;
+      const abbrev = resolveUSStateAbbrev(part);
+      if (abbrev) return abbrev;
+    }
+
+    // Explicit USA/US label but no state found
+    if (parts.some(p => /\b(united states of america|united states|usa|u\.s\.a?\.)\b/i.test(p))) {
+      return 'United States';
+    }
 
     // Generic: return the last segment as country
     return parts[parts.length - 1] || normalized;
@@ -912,66 +965,73 @@ const GeneratedResume = ({ resumeData }) => {
           })
         );
 
-        // Job title row with location right-aligned
-        paragraphs.push(
-          new Table({
-            width: {
-              size: 100,
-              type: WidthType.PERCENTAGE,
-            },
-            borders: {
-              top: { style: BorderStyle.NONE },
-              bottom: { style: BorderStyle.NONE },
-              left: { style: BorderStyle.NONE },
-              right: { style: BorderStyle.NONE },
-              insideHorizontal: { style: BorderStyle.NONE },
-              insideVertical: { style: BorderStyle.NONE },
-            },
-            rows: [
-              new TableRow({
-                children: [
-                  new TableCell({
-                    width: {
-                      size: 70,
-                      type: WidthType.PERCENTAGE
-                    },
-                    children: [
-                      new Paragraph({
-                        children: [
-                          new TextRun({
-                            text: job.roleName || 'Role',
-                            bold: true,
-                            size: 28,
-                            color: '0F3E78',
-                          })
-                        ]
-                      })
-                    ],
-                  }),
-                  new TableCell({
-                    width: {
-                      size: 30,
-                      type: WidthType.PERCENTAGE
-                    },
-                    children: [
-                      new Paragraph({
-                        alignment: AlignmentType.RIGHT,
-                        children: [
-                          new TextRun({
-                            text: formattedJobLocation,
-                            color: '0F3E78',
-                            size: 28,
-                            bold: true,
-                          })
-                        ]
-                      })
-                    ],
-                  })
-                ]
-              })
-            ]
-          })
-        );
+        // Job title row — show location right-aligned only when available
+        if (formattedJobLocation) {
+          paragraphs.push(
+            new Table({
+              width: { size: 100, type: WidthType.PERCENTAGE },
+              borders: {
+                top: { style: BorderStyle.NONE },
+                bottom: { style: BorderStyle.NONE },
+                left: { style: BorderStyle.NONE },
+                right: { style: BorderStyle.NONE },
+                insideHorizontal: { style: BorderStyle.NONE },
+                insideVertical: { style: BorderStyle.NONE },
+              },
+              rows: [
+                new TableRow({
+                  children: [
+                    new TableCell({
+                      width: { size: 70, type: WidthType.PERCENTAGE },
+                      children: [
+                        new Paragraph({
+                          children: [
+                            new TextRun({
+                              text: job.roleName || 'Role',
+                              bold: true,
+                              size: 28,
+                              color: '0F3E78',
+                            })
+                          ]
+                        })
+                      ],
+                    }),
+                    new TableCell({
+                      width: { size: 30, type: WidthType.PERCENTAGE },
+                      children: [
+                        new Paragraph({
+                          alignment: AlignmentType.RIGHT,
+                          children: [
+                            new TextRun({
+                              text: formattedJobLocation,
+                              color: '0F3E78',
+                              size: 28,
+                              bold: true,
+                            })
+                          ]
+                        })
+                      ],
+                    })
+                  ]
+                })
+              ]
+            })
+          );
+        } else {
+          // No location — render role as a full-width paragraph (no empty cell)
+          paragraphs.push(
+            new Paragraph({
+              children: [
+                new TextRun({
+                  text: job.roleName || 'Role',
+                  bold: true,
+                  size: 28,
+                  color: '0F3E78',
+                })
+              ]
+            })
+          );
+        }
 
         if (departmentOrSubRole) {
           paragraphs.push(
@@ -1089,15 +1149,11 @@ const GeneratedResume = ({ resumeData }) => {
                   paragraphs.push(
                     new Paragraph({
                       alignment: AlignmentType.JUSTIFIED,
-                      bullet: {
-                        level: 0
-                      },
-                      indent: {
-                        left: 350
-                      },
+                      indent: { left: 360, hanging: 200 },
                       children: [
+                        new TextRun({ text: '\u2022  ', size: 22, font: "Calibri", color: '000000' }),
                         new TextRun({
-                          text: responsibility,
+                          text: stripBullet(responsibility),
                           size: 22,
                           font: "Calibri",
                           color: '000000'
@@ -1156,15 +1212,11 @@ const GeneratedResume = ({ resumeData }) => {
               paragraphs.push(
                 new Paragraph({
                   alignment: AlignmentType.JUSTIFIED,
-                  bullet: {
-                    level: 0
-                  },
-                  indent: {
-                    left: 350
-                  },
+                  indent: { left: 360, hanging: 200 },
                   children: [
+                    new TextRun({ text: '\u2022  ', size: 22, font: "Calibri", color: '000000' }),
                     new TextRun({
-                      text: resp,
+                      text: stripBullet(resp),
                       size: 22,
                       font: "Calibri",
                       color: '000000'
@@ -1205,15 +1257,11 @@ const GeneratedResume = ({ resumeData }) => {
                     paragraphs.push(
                       new Paragraph({
                         alignment: AlignmentType.JUSTIFIED,
-                        bullet: {
-                          level: 0
-                        },
-                        indent: {
-                          left: 350
-                        },
+                        indent: { left: 360, hanging: 200 },
                         children: [
+                          new TextRun({ text: '\u2022  ', size: 22, font: "Calibri", color: '000000' }),
                           new TextRun({
-                            text: item,
+                            text: stripBullet(item),
                             size: 22,
                             font: "Calibri",
                             color: '000000'
@@ -1703,157 +1751,6 @@ const GeneratedResume = ({ resumeData }) => {
           )}
         </header>
 
-        {/* Professional Summary */}
-        {(resumeData.professionalSummary && resumeData.professionalSummary.length > 0) ||
-          (resumeData.summarySections && resumeData.summarySections.length > 0) ||
-          (resumeData.subsections && resumeData.subsections.length > 0) ? (
-          <section className="mb-6">
-            <h2 className="text-xl font-semibold border-b-2 border-ocean-blue pb-2 mb-4 text-ocean-dark">Professional Summary</h2>
-
-            {/* Main summary points — plain paragraphs, no bullets */}
-            {resumeData.professionalSummary && resumeData.professionalSummary.length > 0 && (
-              <div className="space-y-1 mb-4">
-                {resumeData.professionalSummary.map((point, index) => (
-                  <p key={index} className="text-gray-800 text-justify">{point}</p>
-                ))}
-              </div>
-            )}
-
-            {/* Summary subsections - support both formats, no bullets */}
-            {(resumeData.summarySections || resumeData.subsections) &&
-              ((resumeData.summarySections && resumeData.summarySections.length > 0) ||
-                (resumeData.subsections && resumeData.subsections.length > 0)) && (
-                <div className="mt-4 space-y-3">
-                  {(resumeData.summarySections || resumeData.subsections).map((subsection, index) => (
-                    <div key={index} className="pl-3 py-1">
-                      {subsection.title && (
-                        <h4 className="font-medium text-gray-800">{subsection.title}</h4>
-                      )}
-                      {subsection.content && subsection.content.length > 0 ? (
-                        <div className="space-y-1">
-                          {subsection.content.map((item, itemIndex) => (
-                            <p key={itemIndex} className="text-gray-800 text-justify">{item}</p>
-                          ))}
-                        </div>
-                      ) : null}
-                    </div>
-                  ))}
-                </div>
-              )}
-          </section>
-        ) : null}
-
-        {/* Work Experience */}
-        {resumeData.employmentHistory && resumeData.employmentHistory.length > 0 && (
-          <section className="mb-6">
-            <h2 className="text-xl font-semibold border-b-2 border-ocean-blue pb-2 mb-4 text-ocean-dark">Employment History</h2>
-
-            {resumeData.employmentHistory.map((job, index) => {
-              const formattedJobLocation = formatEmploymentLocation(job.location || '');
-              const departmentOrSubRole = (job.department || job.subRole || '').trim();
-
-              return (
-                <div key={index} className="mb-6">
-                  {/* LINE 1: Company Name (left)  |  Employment Period (right) */}
-                  <div className="flex justify-between items-baseline">
-                    <h3 className="font-bold text-lg text-blue-900">{job.companyName || 'Company Name'}</h3>
-                    <span className="text-gray-700 font-semibold text-sm whitespace-nowrap ml-4">{job.workPeriod || ''}</span>
-                  </div>
-                  {/* LINE 2: Job Title (left)  |  Location (right) */}
-                  <div className="flex justify-between items-baseline">
-                    <p className="font-medium text-gray-800">{job.roleName || 'Role'}</p>
-                    <span className="text-gray-600 text-sm whitespace-nowrap ml-4">{formattedJobLocation || ''}</span>
-                  </div>
-                  {/* LINE 3: Department / Sub-Role (if present) */}
-                  {departmentOrSubRole && (
-                    <p className="text-sm text-gray-700 mt-0.5">{departmentOrSubRole}</p>
-                  )}
-
-
-                  {job.description && (
-                    <p className="my-2 text-gray-800">{job.description}</p>
-                  )}
-
-                  {/* Projects */}
-                  {job.projects && job.projects.length > 0 && (
-                    <div className="mt-3">
-                      {job.projects.map((project, projIndex) => {
-                        const totalProjects = job.projects.length;
-                        const projectForTitle = {
-                          ...project,
-                          projectLocation: project.projectLocation || job.location || ''
-                        };
-                        const projectTitle = formatProjectTitle(projectForTitle, projIndex, totalProjects);
-
-                        return (
-                          <div key={projIndex} className="border-l-2 border-blue-200 pl-4 mb-3 bg-blue-50 p-3 rounded">
-                            {/* Project name (left) | Period (right) — dates NEVER next to project name inline */}
-                            <div className="flex justify-between items-baseline gap-4 mb-1">
-                              <h5 className="font-semibold text-blue-900">
-                                {projectTitle}
-                              </h5>
-                            </div>
-                            {project.keyTechnologies && (
-                              <p className="text-sm text-gray-600 mb-2">
-                                <span className="font-medium">Technologies: </span>
-                                {project.keyTechnologies}
-                              </p>
-                            )}
-                            {project.projectResponsibilities && project.projectResponsibilities.length > 0 && (
-                              <ul className="list-disc pl-5 space-y-1">
-                                {project.projectResponsibilities.map((resp, respIndex) => (
-                                  <li key={respIndex} className="text-gray-800 text-sm">{resp}</li>
-                                ))}
-                              </ul>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-
-                {job.responsibilities && job.responsibilities.length > 0 && (
-                  <div className="mt-2">
-                    <p className="font-medium">General Responsibilities:</p>
-                    <ul className="list-disc pl-5 space-y-1">
-                      {job.responsibilities.map((resp, respIndex) => (
-                        <li key={respIndex} className="text-gray-800">{resp}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-
-                {/* Subsections */}
-                {job.subsections && job.subsections.length > 0 && job.subsections.map((subsection, subIndex) => (
-                  <div key={subIndex} className="mt-3">
-                    {subsection.title && (
-                      <p className="font-medium">{subsection.title}:</p>
-                    )}
-                    {subsection.content && subsection.content.length > 0 && (
-                      <ul className="list-disc pl-5 space-y-1">
-                        {subsection.content.map((item, itemIndex) => (
-                          <li key={itemIndex} className="text-gray-800">{item}</li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-                ))}
-
-                {job.keyTechnologies && (
-                  <p className="mt-2">
-                    <span className="font-medium">Key Technologies/Skills: </span>
-                    <span className="text-gray-800">{job.keyTechnologies}</span>
-                  </p>
-                )}
-
-
-
-                </div>
-              );
-            })}
-          </section>
-        )}
-
         {/* Education */}
         {sortedEducation.length > 0 && (
           <section className="mb-6">
@@ -1899,6 +1796,156 @@ const GeneratedResume = ({ resumeData }) => {
             ))}
           </section>
         )}
+
+        {/* Work Experience */}
+        {resumeData.employmentHistory && resumeData.employmentHistory.length > 0 && (
+          <section className="mb-6">
+            <h2 className="text-xl font-semibold border-b-2 border-ocean-blue pb-2 mb-4 text-ocean-dark">Employment History</h2>
+
+            {resumeData.employmentHistory.map((job, index) => {
+              const formattedJobLocation = formatEmploymentLocation(job.location || '');
+              const departmentOrSubRole = (job.department || job.subRole || '').trim();
+
+              return (
+                <div key={index} className="mb-6">
+                  {/* LINE 1: Company Name (left)  |  Employment Period (right) */}
+                  <div className="flex justify-between items-baseline">
+                    <h3 className="font-bold text-lg text-blue-900">{job.companyName || 'Company Name'}</h3>
+                    <span className="text-gray-700 font-semibold text-sm whitespace-nowrap ml-4">{job.workPeriod || ''}</span>
+                  </div>
+                  {/* LINE 2: Job Title (left)  |  Location (right, only if available) */}
+                  <div className="flex justify-between items-baseline">
+                    <p className="font-medium text-gray-800">{job.roleName || 'Role'}</p>
+                    {formattedJobLocation && (
+                      <span className="text-gray-600 text-sm whitespace-nowrap ml-4">{formattedJobLocation}</span>
+                    )}
+                  </div>
+                  {/* LINE 3: Department / Sub-Role (if present) */}
+                  {departmentOrSubRole && (
+                    <p className="text-sm text-gray-700 mt-0.5">{departmentOrSubRole}</p>
+                  )}
+
+                  {job.description && (
+                    <p className="my-2 text-gray-800">{job.description}</p>
+                  )}
+
+                  {/* Projects */}
+                  {job.projects && job.projects.length > 0 && (
+                    <div className="mt-3">
+                      {job.projects.map((project, projIndex) => {
+                        const totalProjects = job.projects.length;
+                        const projectForTitle = {
+                          ...project,
+                          projectLocation: project.projectLocation || job.location || ''
+                        };
+                        const projectTitle = formatProjectTitle(projectForTitle, projIndex, totalProjects);
+
+                        return (
+                          <div key={projIndex} className="border-l-2 border-blue-200 pl-4 mb-3 bg-blue-50 p-3 rounded">
+                            {/* Project name (left) | Period (right) — dates NEVER next to project name inline */}
+                            <div className="flex justify-between items-baseline gap-4 mb-1">
+                              <h5 className="font-semibold text-blue-900">
+                                {projectTitle}
+                              </h5>
+                            </div>
+                            {project.keyTechnologies && (
+                              <p className="text-sm text-gray-600 mb-2">
+                                <span className="font-medium">Technologies: </span>
+                                {project.keyTechnologies}
+                              </p>
+                            )}
+                            {project.projectResponsibilities && project.projectResponsibilities.length > 0 && (
+                              <ul className="list-disc pl-5 space-y-1">
+                                {project.projectResponsibilities.map((resp, respIndex) => (
+                                  <li key={respIndex} className="text-gray-800 text-sm">{stripBullet(resp)}</li>
+                                ))}
+                              </ul>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                {job.responsibilities && job.responsibilities.length > 0 && (
+                  <div className="mt-2">
+                    <p className="font-medium">Responsibilities:</p>
+                    <ul className="list-disc pl-5 space-y-1">
+                      {job.responsibilities.map((resp, respIndex) => (
+                        <li key={respIndex} className="text-gray-800">{stripBullet(resp)}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {/* Subsections */}
+                {job.subsections && job.subsections.length > 0 && job.subsections.map((subsection, subIndex) => (
+                  <div key={subIndex} className="mt-3">
+                    {subsection.title && (
+                      <p className="font-medium">{subsection.title}:</p>
+                    )}
+                    {subsection.content && subsection.content.length > 0 && (
+                      <ul className="list-disc pl-5 space-y-1">
+                        {subsection.content.map((item, itemIndex) => (
+                          <li key={itemIndex} className="text-gray-800">{stripBullet(item)}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                ))}
+
+                {job.keyTechnologies && (
+                  <p className="mt-2">
+                    <span className="font-medium">Key Technologies/Skills: </span>
+                    <span className="text-gray-800">{job.keyTechnologies}</span>
+                  </p>
+                )}
+
+                </div>
+              );
+            })}
+          </section>
+        )}
+
+        {/* Professional Summary */}
+        {(resumeData.professionalSummary && resumeData.professionalSummary.length > 0) ||
+          (resumeData.summarySections && resumeData.summarySections.length > 0) ||
+          (resumeData.subsections && resumeData.subsections.length > 0) ? (
+          <section className="mb-6">
+            <h2 className="text-xl font-semibold border-b-2 border-ocean-blue pb-2 mb-4 text-ocean-dark">Professional Summary</h2>
+
+            {/* Main summary points — plain paragraphs, no bullets */}
+            {resumeData.professionalSummary && resumeData.professionalSummary.length > 0 && (
+              <div className="space-y-1 mb-4">
+                {resumeData.professionalSummary.map((point, index) => (
+                  <p key={index} className="text-gray-800 text-justify">{point}</p>
+                ))}
+              </div>
+            )}
+
+            {/* Summary subsections - support both formats, no bullets */}
+            {(resumeData.summarySections || resumeData.subsections) &&
+              ((resumeData.summarySections && resumeData.summarySections.length > 0) ||
+                (resumeData.subsections && resumeData.subsections.length > 0)) && (
+                <div className="mt-4 space-y-3">
+                  {(resumeData.summarySections || resumeData.subsections).map((subsection, index) => (
+                    <div key={index} className="pl-3 py-1">
+                      {subsection.title && (
+                        <h4 className="font-medium text-gray-800">{subsection.title}</h4>
+                      )}
+                      {subsection.content && subsection.content.length > 0 ? (
+                        <div className="space-y-1">
+                          {subsection.content.map((item, itemIndex) => (
+                            <p key={itemIndex} className="text-gray-800 text-justify">{item}</p>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              )}
+          </section>
+        ) : null}
 
         {/* Technical Skills */}
         {(resumeData.technicalSkills && Object.keys(resumeData.technicalSkills).length > 0) ||

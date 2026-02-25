@@ -193,6 +193,23 @@ def normalize_work_period(work_period: str) -> str:
     return normalized.strip()
 
 
+# Indian states and union territories — used to detect India when "India" is absent
+_INDIA_STATES = {
+    'andhra pradesh', 'arunachal pradesh', 'assam', 'bihar', 'chhattisgarh',
+    'goa', 'gujarat', 'haryana', 'himachal pradesh', 'jharkhand', 'karnataka',
+    'kerala', 'madhya pradesh', 'maharashtra', 'manipur', 'meghalaya',
+    'mizoram', 'nagaland', 'odisha', 'orissa', 'punjab', 'rajasthan',
+    'sikkim', 'tamil nadu', 'telangana', 'tripura', 'uttar pradesh',
+    'uttarakhand', 'uttaranchal', 'west bengal',
+    # Union territories
+    'delhi', 'ncr', 'chandigarh', 'puducherry', 'pondicherry',
+    'jammu and kashmir', 'ladakh', 'lakshadweep',
+}
+_INDIA_STATES_RE = re.compile(
+    r'\b(' + '|'.join(re.escape(s) for s in _INDIA_STATES) + r')\b',
+    re.IGNORECASE,
+)
+
 # US state name → 2-letter abbreviation mapping
 _US_STATE_MAP = {
     'Alabama': 'AL', 'Alaska': 'AK', 'Arizona': 'AZ', 'Arkansas': 'AR',
@@ -235,19 +252,22 @@ def normalize_location(location: str) -> str:
     normalized = ' '.join(location.split())
 
     # ── RULE 1: INDIA ────────────────────────────────────────────────────────
-    if re.search(r'\bIndia\b', normalized, re.IGNORECASE):
+    # Detect India either by the word "India" OR by any recognised Indian
+    # state / UT name (catches "Hyderabad, Telangana" with no "India" word).
+    is_india = bool(re.search(r'\bIndia\b', normalized, re.IGNORECASE)) or \
+               bool(_INDIA_STATES_RE.search(normalized))
+
+    if is_india:
         # Extract city: first segment before comma / state abbreviation / "India"
         city_match = re.match(r'^([^,]+)', normalized)
         if city_match:
             city = city_match.group(1).strip()
             # Remove standalone 2-letter state codes (e.g. "KA", "TN")
             city = re.sub(r'\b[A-Z]{2}\b', '', city).strip(' ,')
-            # Remove spelled-out Indian state names (heuristic: any word not
-            # "India" that precedes "India" after a comma)
+            # Remove spelled-out Indian state names
             city = re.sub(r'\s*,\s*\w+\s*$', '', city).strip()
-            # FIX #NEW-1: If extracted "city" IS "India", there is no city –
-            # just return "India" to avoid "India, India" duplication.
-            if city and city.lower() != 'india':
+            # If city turns out to be "India" itself, return just "India"
+            if city and city.lower() not in ('india', ''):
                 return f"{city}, India"
         return "India"
 
