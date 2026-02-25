@@ -23,6 +23,19 @@ WORK_DATE_RANGE_PATTERN = re.compile(
     r"dec(?:ember)?)\s+(?:19|20)\d{2})\b"
 )
 
+# Detects a job-entry header line such as:
+#   "Salesforce Developer at DigitalBizTech (Jan 2022 - Jan 2024)"
+# Used by _rescue_jobs_from_skills_chunk to find misclassified experience blocks.
+_JOB_ROLE_IN_NON_EXPERIENCE_PATTERN = re.compile(
+    r"^(?![●•\u2022\u2023\u25E6\u2043\u2219\u00B7\u25CF\-\*\s])"
+    r"[A-Za-z][A-Za-z ,/]+?\s+at\s+[A-Za-z0-9][A-Za-z0-9 ,\.]+?"
+    r"\s*\(\s*"
+    r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
+    r"jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|"
+    r"dec(?:ember)?)\s+(?:19|20)\d{2}",
+    re.IGNORECASE | re.MULTILINE,
+)
+
 SECTION_HEADER_ALIASES = {
     "summary": [
         "summary",
@@ -162,6 +175,7 @@ def chunk_resume_from_bold_headings(
                 "Uncategorized extraction differs from trimmed raw text length "
                 "(expected due to trimming)."
             ]
+        print(result)
         return result
 
     # Sort + dedup
@@ -244,9 +258,14 @@ def chunk_resume_from_bold_headings(
     if integrity_warnings:
         result["integrity_warning"] = integrity_warnings
 
+    # ✅ RESCUE: Move misclassified job entries from skills → experience.
+    # Handles resumes where a 'Skills' heading appears between experience entries,
+    # causing older jobs to be absorbed into the skills chunk.
+    result = _rescue_jobs_from_skills_chunk(result)
+
     # ✅ FIX #9: Apply standard section ordering before returning
     result = reorder_sections_to_standard(result)
-
+    print(result)
     return result
 
 
@@ -401,6 +420,62 @@ def _infer_experience_match(
         "line_end":      first["line_end"],
         "content_start": first["line_start"],
     }
+
+
+def _rescue_jobs_from_skills_chunk(sections: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Detect and rescue job experience entries that were misclassified into the
+    skills section due to non-standard resume layouts (e.g. a 'Skills' heading
+    appears between experience entries in the original document).
+
+    When a "Role at Company (Month YYYY" pattern is found inside the skills
+    text, the chunk is split at that position:
+      - Text before the first job header  → remains in 'skills'
+      - Text from the first job header onward → appended to 'experience'
+
+    Example trigger layout (Yeshwanth-style resume):
+        [Experience header]
+          Job 1 (WineDirect)  ← captured correctly
+        [Skills header]        ← misplaced heading causes the problem
+          skill bullets
+          Job 2 (Albany)       ← these 3 jobs get rescued back to experience
+          Job 3 (Virtusa)
+          Job 4 (iNtechspace)
+        [Education header]
+
+    Note: integrity_check counters are intentionally not updated here because
+    they reflect original raw-text slice boundaries and are diagnostic only.
+    """
+    skills_text = sections.get("skills")
+    if not isinstance(skills_text, str) or not skills_text.strip():
+        return sections
+
+    match = _JOB_ROLE_IN_NON_EXPERIENCE_PATTERN.search(skills_text)
+    if not match:
+        return sections  # No embedded jobs detected; nothing to rescue
+
+    split_pos = match.start()
+    skills_only = skills_text[:split_pos].strip()
+    rescued_jobs = skills_text[split_pos:].strip()
+
+    if not rescued_jobs:
+        return sections
+
+    logger.warning(
+        f"[RESCUE] Found {len(rescued_jobs)} chars of job experience embedded in "
+        f"'skills' section at char offset {split_pos}. Rescuing to 'experience'."
+    )
+
+    # Update skills section; set to None if all content was job entries
+    sections["skills"] = skills_only if skills_only else None
+
+    # Append rescued jobs to the existing experience section (if any)
+    existing_exp = (sections.get("experience") or "").strip()
+    sections["experience"] = (
+        existing_exp + "\n\n" + rescued_jobs if existing_exp else rescued_jobs
+    )
+
+    return sections
 
 
 # ─────────────────────────────────────────────────────────────────────────────

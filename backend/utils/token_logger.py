@@ -24,18 +24,18 @@ def calculate_cost(prompt_tokens: int, completion_tokens: int, model: str) -> fl
     """
     
     pricing = {
-        'gpt-4o-mini': {
+        'gpt-5-mini': {
             'input': 0.00015,   
             'output': 0.0006    
         },
-        'gpt-4o': {
+        'gpt-5': {
             'input': 0.003,     
             'output': 0.01      
         }
     }
     
 
-    model_pricing = pricing.get(model, pricing['gpt-4o-mini'])
+    model_pricing = pricing.get(model, pricing['gpt-5-mini'])
     
     input_cost = (prompt_tokens / 1000) * model_pricing['input']
     output_cost = (completion_tokens / 1000) * model_pricing['output']

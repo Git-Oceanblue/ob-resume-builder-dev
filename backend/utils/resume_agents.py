@@ -1,19 +1,4 @@
-"""
-Multi-Agent Resume Processing System
-Simplified version with 6 specialized agents for parallel processing
 
-FIXES APPLIED:
-  BUG #3  - Duration duplication: enforce_project_period_dedup()
-  BUG #4  - Key technologies duplication: enforce_tech_responsibility_rules()
-  BUG #6  - Year-only date format: normalize_work_period() extended
-  BUG #7  - City/location India+USA rules: normalize_location() rewritten
-  BUG #8  - Name capitalization: normalize_person_name() title-casing added
-  BUG #9  - Section order: reorder_sections_to_standard() added
-  BUG #10 - Fabricated projects: validate_project_not_fabricated() added
-  BUG #11 - Whitespace: handled in file_parser.py (see that file)
-  BUG #12 - Month/year format validation: validate_date_format() added
-  BUG #14 - Cert field separation: extract_certification_fields() added
-"""
 
 import asyncio
 import json
@@ -788,7 +773,7 @@ class ResumeAgent:
     async def process(
         self,
         input_text: str,
-        model: str = 'gpt-4o-mini'
+        model: str = "gpt-5-mini"
     ) -> AgentResult:
         """Process resume text and extract section-specific data"""
         start_time = start_timing()
@@ -811,8 +796,7 @@ class ResumeAgent:
                 ],
                 tools=[{"type": "function", "function": self.schema}],
                 tool_choice={"type": "function", "function": {"name": self.schema["name"]}},
-                max_tokens=16384,
-                temperature=0.1,
+                max_completion_tokens=16384,
             )
 
             processing_time = (datetime.now() - start_time).total_seconds()
@@ -1040,7 +1024,7 @@ class MultiAgentResumeProcessor:
     async def process_resume_with_agents(
         self,
         raw_text: str,
-        model: str = 'gpt-4o-mini',
+        model: str = 'gpt-5-mini',
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """Process resume using multiple specialized agents in parallel."""
         logger.info("Starting resume processing...")

@@ -129,6 +129,38 @@ const GeneratedResume = ({ resumeData }) => {
     return normalized;
   };
 
+  // ─────────────────────────────────────────────────────────────
+  // HELPER: getEducationCountry
+  //   Extracts only the country name from an education location string.
+  //   "Kakinada, India"   → "India"
+  //   "Tuscaloosa, AL"    → "United States"
+  //   "London, UK"        → "UK"
+  // ─────────────────────────────────────────────────────────────
+  const US_STATE_ABBREVS = new Set([
+    'AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA','HI','ID','IL','IN','IA',
+    'KS','KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ',
+    'NM','NY','NC','ND','OH','OK','OR','PA','RI','SC','SD','TN','TX','UT','VT',
+    'VA','WA','WV','WI','WY','DC'
+  ]);
+
+  const getEducationCountry = (location = '') => {
+    const raw = typeof location === 'string' ? location : '';
+    const normalized = raw.replace(/\s+/g, ' ').trim();
+    if (!normalized) return '';
+
+    const parts = normalized.split(',').map(p => p.trim()).filter(Boolean);
+
+    if (parts.some(p => /\bindia\b/i.test(p))) return 'India';
+
+    if (parts.some(p =>
+      US_STATE_ABBREVS.has(p.toUpperCase()) ||
+      /\b(united states|usa|u\.s\.a?\.)\b/i.test(p)
+    )) return 'United States';
+
+    // Generic: return the last segment as country
+    return parts[parts.length - 1] || normalized;
+  };
+
   // Pre-compile month pattern regex for performance
   const MONTH_PATTERN = '(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)';
   
@@ -405,7 +437,7 @@ const GeneratedResume = ({ resumeData }) => {
                 verticalAlign: VerticalAlign.CENTER,
                 children: [new Paragraph({
                   alignment: AlignmentType.CENTER,
-                  children: [new TextRun({ text: edu.location || '-', font: "Calibri", size: 22 })]
+                  children: [new TextRun({ text: getEducationCountry(edu.location) || '-', font: "Calibri", size: 22 })]
                 })],
               }),
               new TableCell({
@@ -1546,16 +1578,11 @@ const GeneratedResume = ({ resumeData }) => {
                 ]
               }),
 
-              // Professional Summary Content
+              // Professional Summary Content — plain paragraphs, no bullets
               ...(resumeData.professionalSummary || []).map(point => (
                 new Paragraph({
                   alignment: AlignmentType.JUSTIFIED,
-                  bullet: {
-                    level: 0
-                  },
-                  indent: {
-                    left: 350
-                  },
+                  spacing: { before: 60 },
                   children: [
                     new TextRun({
                       text: point,
@@ -1567,34 +1594,27 @@ const GeneratedResume = ({ resumeData }) => {
                 })
               )),
 
-              // Summary subsections - support both formats
+              // Summary subsections - support both formats, no bullets
               ...(resumeData.summarySections || resumeData.subsections || []).flatMap(subsection => [
-                // Subsection title
-                new Paragraph({
-                  spacing: {
-                    before: 100
-                  },
+                // Subsection title (only if not empty)
+                ...(subsection.title ? [new Paragraph({
+                  spacing: { before: 100 },
                   children: [
                     new TextRun({
-                      text: subsection.title || '',
+                      text: subsection.title,
                       bold: true,
                       size: 22,
                       font: "Calibri",
                       color: '000000'
                     })
                   ]
-                }),
-                // Subsection content (only if there is content)
+                })] : []),
+                // Subsection content as plain paragraphs
                 ...(subsection.content && subsection.content.length > 0
                   ? subsection.content.map(item => (
                     new Paragraph({
                       alignment: AlignmentType.JUSTIFIED,
-                      bullet: {
-                        level: 0
-                      },
-                      indent: {
-                        left: 350
-                      },
+                      spacing: { before: 60 },
                       children: [
                         new TextRun({
                           text: item,
@@ -1690,31 +1710,31 @@ const GeneratedResume = ({ resumeData }) => {
           <section className="mb-6">
             <h2 className="text-xl font-semibold border-b-2 border-ocean-blue pb-2 mb-4 text-ocean-dark">Professional Summary</h2>
 
-            {/* Main summary points */}
+            {/* Main summary points — plain paragraphs, no bullets */}
             {resumeData.professionalSummary && resumeData.professionalSummary.length > 0 && (
-              <ul className="list-disc pl-5 space-y-1 mb-4">
+              <div className="space-y-1 mb-4">
                 {resumeData.professionalSummary.map((point, index) => (
-                  <li key={index} className="text-gray-800">{point}</li>
+                  <p key={index} className="text-gray-800 text-justify">{point}</p>
                 ))}
-              </ul>
+              </div>
             )}
 
-            {/* Summary subsections - support both formats */}
+            {/* Summary subsections - support both formats, no bullets */}
             {(resumeData.summarySections || resumeData.subsections) &&
               ((resumeData.summarySections && resumeData.summarySections.length > 0) ||
                 (resumeData.subsections && resumeData.subsections.length > 0)) && (
                 <div className="mt-4 space-y-3">
                   {(resumeData.summarySections || resumeData.subsections).map((subsection, index) => (
-                    <div key={index} className="border-l-2 border-blue-100 pl-3 py-1">
+                    <div key={index} className="pl-3 py-1">
                       {subsection.title && (
                         <h4 className="font-medium text-gray-800">{subsection.title}</h4>
                       )}
                       {subsection.content && subsection.content.length > 0 ? (
-                        <ul className="list-disc pl-5 space-y-1">
+                        <div className="space-y-1">
                           {subsection.content.map((item, itemIndex) => (
-                            <li key={itemIndex} className="text-gray-800">{item}</li>
+                            <p key={itemIndex} className="text-gray-800 text-justify">{item}</p>
                           ))}
-                        </ul>
+                        </div>
                       ) : null}
                     </div>
                   ))}
@@ -1848,7 +1868,7 @@ const GeneratedResume = ({ resumeData }) => {
                   </div>
                   <div className="text-right">
                     <p className="text-gray-600">{edu.date || 'Date'}</p>
-                    <p className="text-gray-600">{edu.location || 'Location'}</p>
+                    <p className="text-gray-600">{getEducationCountry(edu.location) || 'Location'}</p>
                   </div>
                 </div>
                 <p className="text-gray-600">{edu.wasAwarded ? 'Degree awarded' : 'Degree in progress'}</p>
