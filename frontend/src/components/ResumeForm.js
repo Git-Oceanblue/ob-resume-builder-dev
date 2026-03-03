@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { FiChevronRight, FiPlus, FiTrash2 } from 'react-icons/fi';
 
-const ResumeForm = ({ initialData, onSubmit }) => {
+const ResumeForm = ({ initialData, onSubmit, onChange, onBack }) => {
   const [formData, setFormData] = useState(initialData || {});
 
   // Initialize form data from initialData, ensuring subsections are properly handled
@@ -35,6 +35,13 @@ const ResumeForm = ({ initialData, onSubmit }) => {
       setFormData(updatedData);
     }
   }, [initialData]);
+
+  // Notify parent of every form change for live preview
+  useEffect(() => {
+    if (onChange && formData && Object.keys(formData).length > 0) {
+      onChange(formData);
+    }
+  }, [formData]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const normalizeDegree = (degree = '') =>
     degree.toUpperCase().replace(/\./g, '').replace(/\s+/g, ' ').trim();
@@ -658,24 +665,36 @@ const ResumeForm = ({ initialData, onSubmit }) => {
   };
 
   return (
-    <div className="max-w-4xl mx-auto animate-slide-up">
-      
-      {/* Header Section */}
-      <div className="text-center mb-8">
-        <h2 className="text-3xl font-bold text-ocean-dark mb-2">Review & Edit Resume</h2>
-      </div>
-      
-      {/* Action Button */}
-      <div className="flex justify-center mb-8">
+    <div className="flex flex-col h-full">
+
+      {/* ── Sticky panel header ── */}
+      <div className="sticky top-0 z-10 bg-white border-b border-gray-200 shadow-sm px-5 py-3 flex items-center justify-between">
+        <div className="flex items-center space-x-3">
+          {onBack && (
+            <button
+              type="button"
+              onClick={onBack}
+              className="flex items-center text-gray-500 hover:text-ocean-dark transition-colors text-sm font-medium"
+            >
+              <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+              </svg>
+              Upload
+            </button>
+          )}
+          <span className="text-gray-300">|</span>
+          <h2 className="text-base font-bold text-ocean-dark">Edit Resume</h2>
+        </div>
         <button
+          type="button"
           onClick={handleSubmit}
-          className="px-6 py-3 bg-gradient-to-r from-ocean-blue to-blue-500 hover:from-blue-600 hover:to-blue-700 text-white rounded-lg flex items-center transition-colors"
+          className="flex items-center px-4 py-2 bg-gradient-to-r from-ocean-dark to-ocean-blue text-white rounded-lg text-sm font-semibold hover:opacity-90 transition-all shadow-md"
         >
-          <FiChevronRight className="mr-2" /> Generate Resume
+          <FiChevronRight className="mr-1.5" /> Save Changes
         </button>
       </div>
-      
-      <form onSubmit={handleSubmit} className="space-y-8">
+
+      <form onSubmit={handleSubmit} className="space-y-6 p-5">
         {/* Personal Information Section */}
         <section className="border border-gray-200 rounded-xl p-6 bg-gradient-to-r from-blue-50 to-indigo-50 shadow-md">
           <h3 className="text-xl font-semibold mb-4 text-ocean-dark flex items-center">
@@ -1505,4 +1524,5 @@ const ResumeForm = ({ initialData, onSubmit }) => {
   );
 };
 
-export default ResumeForm; 
+export default ResumeForm;
+

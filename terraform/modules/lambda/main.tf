@@ -32,6 +32,15 @@ resource "aws_iam_role_policy" "lambda_policy" {
           "logs:PutLogEvents"
         ],
         Resource = "arn:aws:logs:*:*:*"
+      },
+      {
+        # Allow Lambda to call any Bedrock foundation model.
+        # Bedrock uses IAM SigV4 auth — no API key required.
+        Effect = "Allow",
+        Action = [
+          "bedrock:InvokeModel"
+        ],
+        Resource = "arn:aws:bedrock:*::foundation-model/*"
       }
     ]
   })
@@ -49,8 +58,7 @@ resource "aws_lambda_function" "backend" {
 
   environment {
     variables = {
-      ENVIRONMENT     = var.environment,
-      BEDROCK_API_KEY = var.bedrock_api_key
+      ENVIRONMENT = var.environment
     }
   }
 

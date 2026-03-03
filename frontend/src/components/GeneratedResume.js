@@ -43,7 +43,7 @@ const PricingDisplay = ({ resumeData }) => {
   );
 };
 
-const GeneratedResume = ({ resumeData }) => {
+const GeneratedResume = ({ resumeData, previewMode = false }) => {
   const [isGenerating, setIsGenerating] = useState(false);
 
   // Function to handle resume download is removed in favor of Word document generation
@@ -1716,35 +1716,74 @@ const GeneratedResume = ({ resumeData }) => {
   };
 
   return (
-    <div className="max-w-4xl mx-auto animate-slide-up">
+    <div className={previewMode ? 'flex flex-col h-full' : 'max-w-4xl mx-auto animate-slide-up'}>
 
-      {/* Add PricingDisplay component */}
-      <PricingDisplay resumeData={resumeData} />
-
-      {/* Header Section */}
-      <div className="text-center mb-8">
-        <h2 className="text-3xl font-bold text-ocean-dark mb-2">Generated Resume</h2>
+      {/* ── Sticky action bar ── */}
+      <div className={`sticky top-0 z-10 border-b border-gray-200 shadow-sm ${
+        previewMode
+          ? 'bg-gradient-to-r from-ocean-dark to-[#0b6cb5] px-5 py-3'
+          : 'bg-white px-6 py-4'
+      }`}>
+        {previewMode ? (
+          /* Compact preview-mode bar */
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-2">
+              <div className="w-2 h-2 rounded-full bg-ocean-blue animate-pulse" />
+              <span className="text-white text-sm font-semibold tracking-wide">Live Preview</span>
+              <span className="text-blue-300 text-xs">— updates as you edit</span>
+            </div>
+            <div className="flex items-center space-x-2">
+              <button
+                onClick={handlePrint}
+                className="flex items-center px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white rounded-lg text-xs font-medium transition-all border border-white/20"
+              >
+                <FiPrinter className="mr-1.5 text-sm" /> Print
+              </button>
+              <button
+                onClick={handleDownloadWord}
+                disabled={isGenerating}
+                className="flex items-center px-4 py-1.5 bg-white text-ocean-dark hover:bg-blue-50 rounded-lg text-xs font-bold transition-all shadow-md"
+              >
+                <FiDownload className="mr-1.5 text-sm" />
+                {isGenerating ? 'Generating…' : 'Download Word'}
+              </button>
+            </div>
+          </div>
+        ) : (
+          /* Full-page mode bar */
+          <div>
+            <PricingDisplay resumeData={resumeData} />
+            <div className="text-center mb-4">
+              <h2 className="text-3xl font-bold text-ocean-dark mb-2">Generated Resume</h2>
+            </div>
+            <div className="flex justify-center space-x-4">
+              <button
+                onClick={handlePrint}
+                className="px-6 py-3 bg-gray-600 hover:bg-gray-700 text-white rounded-lg flex items-center transition-colors"
+              >
+                <FiPrinter className="mr-2" /> Print Resume
+              </button>
+              <button
+                onClick={handleDownloadWord}
+                className="px-6 py-3 bg-green-600 hover:bg-green-700 text-white rounded-lg flex items-center transition-colors"
+                disabled={isGenerating}
+              >
+                <FiDownload className="mr-2" /> {isGenerating ? 'Generating...' : 'Download Word'}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* Action Buttons */}
-      <div className="flex justify-center space-x-4 mb-8">
-        <button
-          onClick={handlePrint}
-          className="px-6 py-3 bg-gray-600 hover:bg-gray-700 text-white rounded-lg flex items-center transition-colors"
-        >
-          <FiPrinter className="mr-2" /> Print Resume
-        </button>
-        <button
-          onClick={handleDownloadWord}
-          className="px-6 py-3 bg-green-600 hover:bg-green-700 text-white rounded-lg flex items-center transition-colors"
-          disabled={isGenerating}
-        >
-          <FiDownload className="mr-2" /> {isGenerating ? 'Generating...' : 'Download Word'}
-        </button>
-      </div>
+      {/* ── Pricing (preview mode only, below bar) ── */}
+      {previewMode && <PricingDisplay resumeData={resumeData} />}
 
       {/* Resume Preview */}
-      <div className="border-2 border-gray-200 rounded-2xl p-8 bg-white shadow-xl print:shadow-none" id="resume-preview">
+      <div className={`bg-white print:shadow-none ${
+        previewMode
+          ? 'mx-4 my-4 rounded-xl shadow-md border border-gray-200 p-6'
+          : 'border-2 border-gray-200 rounded-2xl p-8 shadow-xl mt-6'
+      }`} id="resume-preview">
         {/* Header */}
         <header className="border-b-2 border-ocean-blue pb-6 mb-6">
           <h1 className="text-4xl font-bold text-center mb-3 text-ocean-dark">{resumeData.name || 'Full Name'}</h1>
@@ -1920,12 +1959,21 @@ const GeneratedResume = ({ resumeData }) => {
           <section className="mb-6">
             <h2 className="text-xl font-semibold border-b-2 border-ocean-blue pb-2 mb-4 text-ocean-dark">Professional Summary</h2>
 
-            {/* Main summary points — plain paragraphs, no bullets */}
+            {/* Main summary points — bullet points when multiple */}
             {resumeData.professionalSummary && resumeData.professionalSummary.length > 0 && (
-              <div className="space-y-1 mb-4">
-                {resumeData.professionalSummary.map((point, index) => (
-                  <p key={index} className="text-gray-800 text-justify">{point}</p>
-                ))}
+              <div className="mb-4">
+                {resumeData.professionalSummary.length > 1 ? (
+                  <ul className="space-y-1 pl-1">
+                    {resumeData.professionalSummary.map((point, index) => (
+                      <li key={index} className="flex items-start text-gray-800 text-justify">
+                        <span className="mr-2 mt-0.5 text-ocean-dark flex-shrink-0">•</span>
+                        <span>{point}</span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="text-gray-800 text-justify">{resumeData.professionalSummary[0]}</p>
+                )}
               </div>
             )}
 
@@ -2013,26 +2061,6 @@ const GeneratedResume = ({ resumeData }) => {
         ) : null}
       </div>
 
-      {/* Print Styles - Hidden in normal view, visible when printing */}
-      <style dangerouslySetInnerHTML={{
-        __html: `
-          @media print {
-            body * {
-              visibility: hidden;
-            }
-            #resume-preview, #resume-preview * {
-              visibility: visible;
-            }
-            #resume-preview {
-              position: absolute;
-              left: 0;
-              top: 0;
-              width: 100%;
-              padding: 40px;
-            }
-          }
-        `
-      }} />
     </div>
   );
 };

@@ -6,7 +6,7 @@ on:
   workflow_dispatch: {}
 
 env:
-  AWS_REGION: us-east-2
+  AWS_REGION: us-east-1   # must match Terraform S3 backend region
 
 jobs:
   deploy:
@@ -51,8 +51,6 @@ jobs:
 
       - name: Terraform Apply
         working-directory: terraform
-        env:
-          TF_VAR_openai_api_key: ${{ secrets.OPENAI_API_KEY }}
         run: |
           terraform apply -auto-approve \
             -var "environment=testing" \

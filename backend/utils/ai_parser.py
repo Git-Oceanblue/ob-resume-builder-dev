@@ -14,20 +14,17 @@ logger = logging.getLogger(__name__)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CLIENT INITIALISATION
+# Auth is handled by the IAM role attached to this process (Lambda execution
+# role in production, ~/.aws/credentials or AWS_* env vars locally).
+# No API key is required — boto3 signs requests with SigV4 automatically.
 # ─────────────────────────────────────────────────────────────────────────────
 
-api_key = os.getenv('BEDROCK_API_KEY')
-if not api_key:
-    logger.error("❌ BEDROCK_API_KEY environment variable is not set")
-    raise ValueError("BEDROCK_API_KEY environment variable is not set")
-logger.info(f"✅ Bedrock API key found: {api_key[:10]}...")
-
 client = BedrockClient(
-    api_key=api_key,
-    base_url=os.getenv('BEDROCK_BASE_URL', 'https://bedrock-runtime.us-east-2.amazonaws.com'),
     model_id=os.getenv('BEDROCK_MODEL_ID', 'openai.gpt-oss-20b-1:0'),
     region=os.getenv('BEDROCK_REGION', 'us-east-2'),
 )
+logger.info("✅ BedrockClient initialised (IAM auth) — model=%s region=%s",
+            client.model_id, client.region)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -24,8 +24,3 @@ variable "lambda_zip_path" {
   type        = string
 }
 
-variable "bedrock_api_key" {
-  description = "Amazon Bedrock API key for the backend"
-  type        = string
-  sensitive   = true
-}
