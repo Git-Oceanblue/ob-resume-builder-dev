@@ -216,8 +216,10 @@ resource "aws_iam_role_policy" "lambda_policy" {
         Sid    = "BedrockInvokeModel"
         Effect = "Allow"
         Action = ["bedrock:InvokeModel"]
-        # Scope to this region; foundation-model ARNs have no account ID segment.
-        Resource = "arn:aws:bedrock:${local.region}::foundation-model/*"
+        # Use var.bedrock_region (not local.region) so the IAM permission matches
+        # the region boto3 actually calls — these can differ when the Lambda
+        # deployment region and the Bedrock model region are not the same.
+        Resource = "arn:aws:bedrock:${var.bedrock_region}::foundation-model/*"
       }
     ]
   })
@@ -252,7 +254,10 @@ resource "aws_lambda_function" "backend" {
 
   environment {
     variables = {
-      ENVIRONMENT = var.environment
+      ENVIRONMENT    = var.environment
+      # Explicit Bedrock region so boto3 calls the correct endpoint.
+      # Must match the region in the IAM policy above.
+      BEDROCK_REGION = var.bedrock_region
     }
   }
 
@@ -271,7 +276,10 @@ resource "aws_lambda_function" "backend" {
 resource "aws_lambda_function_url" "backend_url" {
   function_name      = aws_lambda_function.backend.function_name
   authorization_type = "NONE"
-  invoke_mode        = "BUFFERED"
+  # RESPONSE_STREAM removes the 6 MB BUFFERED payload limit and lets Lambda
+  # flush SSE chunks to the browser progressively instead of buffering the
+  # entire response in memory before sending.
+  invoke_mode        = "RESPONSE_STREAM"
 
   cors {
     allow_credentials = false

@@ -13,6 +13,12 @@ variable "lambda_zip_path" {
   type        = string
 }
 
+variable "bedrock_region" {
+  description = "AWS region where Bedrock models are accessed (must match the IAM policy and BEDROCK_REGION env var)"
+  type        = string
+  default     = "us-east-2"
+}
+
 variable "lambda_layer_zip_path" {
   description = <<-EOT
     Optional local path to the Lambda Layer zip (Python dependencies).

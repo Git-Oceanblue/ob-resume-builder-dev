@@ -55,4 +55,5 @@ module "lambda" {
   environment           = var.environment
   lambda_zip_path       = var.lambda_zip_path
   lambda_layer_zip_path = var.lambda_layer_zip_path
+  bedrock_region        = var.bedrock_region
 }

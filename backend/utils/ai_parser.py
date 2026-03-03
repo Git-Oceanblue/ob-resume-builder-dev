@@ -19,9 +19,15 @@ logger = logging.getLogger(__name__)
 # No API key is required — boto3 signs requests with SigV4 automatically.
 # ─────────────────────────────────────────────────────────────────────────────
 
+_bedrock_region = os.getenv('BEDROCK_REGION')
+if not _bedrock_region:
+    logger.warning("⚠️  BEDROCK_REGION env var not set — falling back to us-east-2. "
+                   "Ensure the Lambda IAM policy allows bedrock:InvokeModel in this region.")
+    _bedrock_region = 'us-east-2'
+
 client = BedrockClient(
     model_id=os.getenv('BEDROCK_MODEL_ID', 'openai.gpt-oss-20b-1:0'),
-    region=os.getenv('BEDROCK_REGION', 'us-east-2'),
+    region=_bedrock_region,
 )
 logger.info("✅ BedrockClient initialised (IAM auth) — model=%s region=%s",
             client.model_id, client.region)

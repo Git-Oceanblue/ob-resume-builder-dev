@@ -23,16 +23,16 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Resume Builder API", version="1.0.0")
 
-# CORS — allows the React dev server (localhost:3000) to reach the API.
-# In production (Lambda Function URLs) CORS is handled at the AWS level.
+# CORS — allow all origins.
+# In production the Lambda Function URL CORS config (allow_origins = ["*"])
+# controls preflight. This middleware must also allow all origins so that
+# CloudFront/any domain receives the `Access-Control-Allow-Origin` header
+# in the actual response body — without this, the browser silently blocks
+# every non-localhost response even though the Lambda was invoked correctly.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:3001",
-        "http://127.0.0.1:3000",
-    ],
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,   # must be False when allow_origins is "*"
     allow_methods=["*"],
     allow_headers=["*"],
 )
