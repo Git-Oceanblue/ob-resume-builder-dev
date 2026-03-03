@@ -3,16 +3,20 @@
 import asyncio
 import json
 import logging
+import os
 import re
 from datetime import datetime
 from typing import Dict, List, Any, Optional, AsyncGenerator
 from dataclasses import dataclass
 from enum import Enum
 
-from openai import AsyncOpenAI
+from dotenv import load_dotenv, find_dotenv
+from .bedrock_client import BedrockClient
 from .agent_schemas import ResumeAgentSchemas
 from .token_logger import start_timing, log_cache_analysis
 from .chunk_resume import strip_bullet_prefix
+
+load_dotenv(find_dotenv())
 
 logger = logging.getLogger(__name__)
 
@@ -645,6 +649,20 @@ class AgentType(Enum):
     CERTIFICATIONS = "certifications"
 
 
+# ── Per-agent output token budget ────────────────────────────────────────────
+# Sized for openai.gpt-oss-120b-1:0 which has a 128 k context window.
+# The model still prepends a <reasoning>…</reasoning> block; these values
+# include generous headroom for that overhead.
+_AGENT_MAX_TOKENS: Dict[AgentType, int] = {
+    AgentType.HEADER:         4096,
+    AgentType.SUMMARY:        8192,
+    AgentType.EXPERIENCE:     16384,
+    AgentType.EDUCATION:      4096,
+    AgentType.SKILLS:         8192,
+    AgentType.CERTIFICATIONS: 8192,
+}
+
+
 @dataclass
 class AgentResult:
     """Structured result from an individual agent"""
@@ -664,10 +682,11 @@ class ResumeAgent:
     Individual resume processing agent with specialized extraction capabilities
     """
 
-    def __init__(self, client: AsyncOpenAI, agent_type: AgentType):
-        self.client = client
+    def __init__(self, client: BedrockClient, agent_type: AgentType):
+        self.client     = client
         self.agent_type = agent_type
-        self.schema = self._get_agent_schema()
+        # schema kept for reference only – not sent to the model
+        self.schema     = self._get_agent_schema()
 
     def _get_agent_schema(self) -> Dict[str, Any]:
         schema_map = {
@@ -695,7 +714,12 @@ class ResumeAgent:
             "with a specific project name in the resume text. If no named projects are "
             "mentioned for a job, return an empty projects array.\n"
             "7. DATES: Always use 3-letter month abbreviations (Jan, Feb, Mar, …) and "
-            "4-digit years (2024, not '24). Never use full month names."
+            "4-digit years (2024, not '24). Never use full month names.\n\n"
+            "RESPONSE FORMAT (MANDATORY):\n"
+            "- Return ONLY a single valid JSON object.\n"
+            "- Do NOT include any explanation, commentary, or markdown.\n"
+            "- Do NOT wrap the JSON in code fences (``` or ```json).\n"
+            "- Your entire response must start with { and end with }."
         )
 
         section_specific = {
@@ -721,21 +745,31 @@ class ResumeAgent:
                 "  MUST be empty – all detail lives in the project objects.\n"
                 "• Number projects in DESCENDING order (most recent = highest number).\n"
                 "• Extract ALL projects – missing a project is a data-loss error.\n\n"
-                "TECHNOLOGY INFERENCE RULE (CRITICAL):\n"
-                "• There may be NO explicit 'Technologies:' label.\n"
-                "• You MUST extract technologies by scanning every responsibility bullet.\n"
-                "• Look for tool/platform/language names mentioned in bullets.\n"
-                "• Populate projectKeyTechnologies (project level) or keyTechnologies "
-                "  (job level if no projects). NEVER leave both empty when bullets exist.\n\n"
+                "TECHNOLOGY EXTRACTION RULE (CRITICAL):\n"
+                "• STEP 1 — Explicit label (highest priority): Look for a line that begins\n"
+                "  with 'Technologies:', 'Tools & Technologies:', 'Key Technologies/Skills:',\n"
+                "  or similar. If found, copy the COMPLETE comma-separated list exactly as\n"
+                "  written — do NOT omit or alter any item, including vendor/tool names\n"
+                "  such as Gearset, Conga, MuleSoft, Copado, Azure, Jest, Mocha, etc.\n"
+                "• STEP 2 — Bullet inference (fallback only): Only when NO explicit\n"
+                "  Technologies label exists, infer technologies by scanning responsibility\n"
+                "  bullets for tool/platform/language names.\n"
+                "• IMPORTANT: The VENDOR NAME RULE below applies ONLY to responsibility\n"
+                "  bullet text — NEVER remove vendor names from keyTechnologies.\n"
+                "• Populate keyTechnologies at project level (if a named project exists)\n"
+                "  or at job level (if no projects). NEVER leave both empty when\n"
+                "  responsibilities or a Technologies label exist.\n\n"
                 "LOCATION RULE:\n"
                 "• If role location is not listed separately, check if it is embedded "
                 "  in the company name (e.g. 'IBM India Pvt Ltd, Hyderabad, India').\n"
                 "• Extract city and country from company name when needed.\n"
                 "• India format: 'City, India'. USA format: 'City, ST'.\n\n"
-                "VENDOR NAME RULE:\n"
+                "VENDOR NAME RULE (responsibility bullets only):\n"
                 "• Remove third-party vendor brand names (Gearset, Conga, MuleSoft, Copado) "
-                "  from responsibility bullets where they appear after 'using', 'via', 'i.e'. "
-                "  Replace or omit the vendor name, keeping the sentence meaningful."
+                "  from responsibility bullet text where they appear after 'using', 'via', 'i.e'. "
+                "  Replace or omit the vendor name, keeping the sentence meaningful.\n"
+                "• This rule applies ONLY to responsibility/bullet text. Vendor names in a\n"
+                "  Technologies/Tools label MUST be preserved in keyTechnologies."
             ),
             AgentType.EDUCATION: (
                 "Extract ONLY education, academic background, and degrees. "
@@ -749,38 +783,160 @@ class ResumeAgent:
                 "  The label is the categoryName; the comma-separated values are skills.\n"
                 "  EXAMPLE: 'Databases & Tools: MSSQL, DB2, Oracle 9i, JIRA' →\n"
                 "    categoryName='Databases & Tools', skills=['MSSQL','DB2','Oracle 9i','JIRA']\n\n"
-                "EXTRACT EVERY CATEGORY – this resume has 8+ categories including:\n"
-                "  SalesForce CRM, Programming Languages, Code Building Technologies,\n"
-                "  Databases & Tools, Other Utilities, Version Control, Frameworks,\n"
-                "  Application and Web Servers, DocGen Tools, etc.\n\n"
-                "DO NOT merge categories. DO NOT skip any. "
+                "EXTRACT EVERY CATEGORY. DO NOT merge categories. DO NOT skip any. "
                 "Split each value list on commas into individual skill strings."
             ),
             AgentType.CERTIFICATIONS: (
                 "Extract ONLY certifications, licenses, and professional credentials.\n\n"
-                "TABLE FORMAT WARNING: The certifications section was extracted from a structured "
-                "table. The raw text will contain TABLE COLUMN HEADERS as literal lines:\n"
+                "TABLE FORMAT WARNING: The raw text may contain TABLE COLUMN HEADERS:\n"
                 "  'Certification', 'Issued By', 'Date Obtained (MM/YY)', "
                 "'Certification Number (If Applicable)', 'Expiration Date (If Applicable)'\n"
-                "These are LAYOUT LABELS, NOT certification names. SKIP all of them.\n\n"
+                "These are LAYOUT LABELS – SKIP all of them.\n\n"
                 "DASH/EMPTY HANDLING: A '-' or '--' means the field is NOT PROVIDED. "
-                "Do NOT use '-' as a value in any field. Treat it as empty.\n\n"
-                "CERTIFICATION IDENTIFICATION: Real certification names come AFTER the "
-                "column header block and look like professional credential titles.\n"
-                "CRITICAL: Put ONLY the certification title in the 'name' field. "
+                "Do NOT use '-' as a value. Treat it as empty string.\n\n"
+                "Put ONLY the certification title in the 'name' field. "
                 "Issuer, date, cert number, and expiry go in their dedicated fields."
             ),
         }
 
         return f"{base_prompt}\n\nSPECIFIC FOCUS: {section_specific[self.agent_type]}"
 
+    def _build_json_schema_prompt(self) -> str:
+        """
+        Returns the exact JSON structure the model must produce, embedded as
+        plain text in the user message.  Replaces OpenAI function/tool calling.
+        """
+        schemas: Dict[AgentType, str] = {
+
+            AgentType.HEADER: """\
+Return ONLY this JSON object (no other text):
+{
+  "name": "<full name only – no emails, phones, or titles>",
+  "title": "<professional title, or empty string>",
+  "requisitionNumber": "<requisition/req number if mentioned, or empty string>"
+}""",
+
+            AgentType.SUMMARY: """\
+Return ONLY this JSON object (no other text):
+{
+  "title": "<professional title, or empty string>",
+  "professionalSummary": [
+    "<first bullet point or paragraph exactly as written>",
+    "<second bullet point exactly as written>",
+    "... include ALL bullet points – do NOT truncate"
+  ],
+  "summarySections": [
+    {
+      "title": "<subsection title – only if explicitly labeled in the resume>",
+      "content": ["<item 1>", "<item 2>"]
+    }
+  ]
+}
+If there are no named subsections, set summarySections to [].
+Include every bullet point in professionalSummary – do NOT summarise.""",
+
+            AgentType.EXPERIENCE: """\
+Return ONLY this JSON object (no other text):
+{
+  "employmentHistory": [
+    {
+      "companyName": "<company name>",
+      "roleName": "<job title>",
+      "workPeriod": "<MMM YYYY - MMM YYYY>  or  <MMM YYYY - Till Date>",
+      "location": "<City, ST>  or  <City, Country>  (e.g. Dallas, TX  /  Hyderabad, India)",
+      "projects": [
+        {
+          "projectName": "<Project N: ProjectTitle / Role>  e.g. Project 3: Portal Migration / Developer",
+          "projectLocation": "<City, Country or empty string>",
+          "projectResponsibilities": ["<bullet 1>", "<bullet 2>", "... ALL bullets"],
+          "projectDescription": "<one-sentence description>",
+          "keyTechnologies": "<Tech1, Tech2, Tech3 – infer from bullets if no explicit label>",
+          "period": "<MMM YYYY - MMM YYYY or empty string if same as job period>"
+        }
+      ],
+      "responsibilities": [],
+      "keyTechnologies": "",
+      "subsections": []
+    }
+  ]
+}
+
+RULES (strictly enforced):
+• Include ALL jobs – missing even one is unacceptable.
+• Jobs with explicit named projects → projects=[...], responsibilities=[], keyTechnologies=""
+• Jobs WITHOUT explicit named projects → projects=[], responsibilities=[...all bullets], keyTechnologies="Tech1, Tech2"
+• Number projects DESCENDING (most recent = highest number).
+• workPeriod format: 'MMM YYYY - MMM YYYY' or 'MMM YYYY - Till Date' (3-letter months only).
+• Location format: 'City, ST' (USA) or 'City, Country' (other).  India → 'City, India' only.""",
+
+            AgentType.EDUCATION: """\
+Return ONLY this JSON object (no other text):
+{
+  "education": [
+    {
+      "degree": "<BS | MS | MBA | MA | MCom | PhD | JD | AA | AS>",
+      "areaOfStudy": "<field of study>",
+      "school": "<institution name only – no location>",
+      "location": "<City, ST>  or  <City, Country>",
+      "date": "<May 2019>  or  <2015 - 2019>",
+      "wasAwarded": true
+    }
+  ]
+}
+
+STANDARDISATION (mandatory):
+• BTech / BE / BCom / BA / Bachelor of ... → "BS"
+• MTech / ME / Master of Technology / Master of Engineering → "MS"
+• MBA → "MBA"   MA → "MA"   PhD / Doctorate → "PhD"
+Sort entries ascending by degree level: BS → MS → MBA → PhD.""",
+
+            AgentType.SKILLS: """\
+Return ONLY this JSON object (no other text):
+{
+  "technicalSkills": {},
+  "skillCategories": [
+    {
+      "categoryName": "<text before the colon, e.g. SalesForce CRM>",
+      "skills": ["<Skill1>", "<Skill2>", "<Skill3>"],
+      "subCategories": []
+    }
+  ]
+}
+
+Each line in the resume formatted as "CategoryName: Skill1, Skill2, Skill3"
+becomes one entry in skillCategories.
+Extract EVERY category – do NOT merge or skip any.
+Split comma-separated skill lists into individual array items.""",
+
+            AgentType.CERTIFICATIONS: """\
+Return ONLY this JSON object (no other text):
+{
+  "certifications": [
+    {
+      "name": "<certification title ONLY – no issuer, dates, or numbers here>",
+      "issuedBy": "<issuing organisation, or empty string>",
+      "dateObtained": "<MMM YYYY, or empty string>",
+      "certificationNumber": "<ID/number if given, or empty string>",
+      "expirationDate": "<MMM YYYY, or empty string>"
+    }
+  ]
+}
+
+CRITICAL:
+• Skip table column header lines: Certification, Issued By, Date Obtained, etc.
+• A dash (-) means the field is empty – use "" not "-".
+• Each certification is a separate object in the array.
+• ONLY the credential title goes in "name".""",
+        }
+        return schemas[self.agent_type]
+
     def _add_cache_variation(self, text: str) -> str:
-        """Add cache-busting variation to prevent OpenAI prompt caching"""
+        """Add session-unique prefix so each agent call is distinct."""
         import random
         import time
 
-        timestamp = int(time.time() * 1000)
-        random_id = ''.join(random.choices('abcdefghijklmnopqrstuvwxyz0123456789', k=8))
+        timestamp  = int(time.time() * 1000)
+        random_id  = ''.join(random.choices('abcdefghijklmnopqrstuvwxyz0123456789', k=8))
         agent_session = f"AGENT_{self.agent_type.value.upper()}_{timestamp}_{random_id}"
 
         return (
@@ -790,41 +946,123 @@ class ResumeAgent:
             + text
         )
 
+    @staticmethod
+    def _extract_json_from_text(text: str) -> Dict[str, Any]:
+        """
+        Robustly extract a JSON object from the model's plain-text response.
+
+        This model (openai.gpt-oss-20b-1:0) emits chain-of-thought reasoning
+        inside <reasoning>…</reasoning> or <think>…</think> tags BEFORE the
+        actual JSON.  We strip those blocks first, then try to parse JSON.
+
+        Extraction attempts (in order):
+          1. Strip reasoning tags → bare JSON.
+          2. Strip reasoning tags → fenced JSON (```json … ```).
+          3. Strip reasoning tags → find outermost { … } block.
+          4. Raw text → find outermost { … } block (fallback).
+        """
+        text = text.strip()
+
+        # ── Step 0: remove chain-of-thought reasoning blocks ─────────────────
+        # Pattern covers <reasoning>…</reasoning> and <think>…</think>
+        cleaned = re.sub(r'<reasoning>[\s\S]*?</reasoning>', '', text).strip()
+        cleaned = re.sub(r'<think>[\s\S]*?</think>',        '', cleaned).strip()
+
+        def _try_parse(s: str) -> Optional[Dict[str, Any]]:
+            s = s.strip()
+            # Attempt A: the whole string is valid JSON
+            try:
+                return json.loads(s)
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+            # Attempt B: strip markdown code fences
+            fence = re.search(r'```(?:json)?\s*\n?([\s\S]*?)\n?```', s)
+            if fence:
+                try:
+                    return json.loads(fence.group(1).strip())
+                except (json.JSONDecodeError, ValueError):
+                    pass
+
+            # Attempt C: find the outermost balanced { … } block
+            brace_start = s.find('{')
+            if brace_start != -1:
+                depth = 0
+                for i in range(brace_start, len(s)):
+                    if s[i] == '{':
+                        depth += 1
+                    elif s[i] == '}':
+                        depth -= 1
+                    if depth == 0:
+                        candidate = s[brace_start: i + 1]
+                        try:
+                            return json.loads(candidate)
+                        except (json.JSONDecodeError, ValueError):
+                            break
+            return None
+
+        # Try on cleaned text first (reasoning stripped), then raw text
+        for source in (cleaned, text):
+            result = _try_parse(source)
+            if result is not None:
+                return result
+
+        raise ValueError(
+            f"Could not extract valid JSON from model output. "
+            f"First 400 chars of response: {text[:400]}"
+        )
+
     async def process(
         self,
         input_text: str,
-        model: str = "gpt-5-mini"
     ) -> AgentResult:
-        """Process resume text and extract section-specific data"""
+        """
+        Extract one resume section via Bedrock InvokeModel.
+
+        Strategy (no tool/function calling):
+          1. Build a user message that embeds the required JSON schema as text.
+          2. POST to Bedrock – request body: {"messages": [...], "max_tokens": N}
+          3. Extract the model's plain-text output via BedrockClient.extract_content().
+          4. Parse the JSON with _extract_json_from_text() (handles fences, etc.).
+          5. Apply existing normalisation / cleaning via _clean_extracted_data().
+        """
         start_time = start_timing()
 
         try:
+            max_output = _AGENT_MAX_TOKENS[self.agent_type]
+
             logger.info(
                 f"🤖 {self.agent_type.value.title()} Agent: Starting extraction "
-                f"(Input: {len(input_text)} chars)"
+                f"(Input: {len(input_text)} chars | max_tokens: {max_output})"
             )
 
-            user_prompt = self._add_cache_variation(
-                f"Extract {self.agent_type.value} information from this resume:\n\n{input_text}"
+            # ── Build the user message ────────────────────────────────────────
+            # Combine:  session prefix | schema instructions | resume text
+            schema_instructions = self._build_json_schema_prompt()
+            resume_block = self._add_cache_variation(
+                f"RESUME TEXT TO EXTRACT FROM:\n\n{input_text}"
             )
+            user_message = f"{schema_instructions}\n\n{resume_block}"
 
-            response = await self.client.chat.completions.create(
-                model=model,
+            # ── Bedrock InvokeModel ───────────────────────────────────────────
+            # No 'tools' or 'tool_choice' – model is a pure text/JSON generator.
+            # The 'model' field is NOT included; it lives in the URL.
+            response = await self.client.invoke(
                 messages=[
                     {"role": "system", "content": self._get_system_prompt()},
-                    {"role": "user",   "content": user_prompt},
+                    {"role": "user",   "content": user_message},
                 ],
-                tools=[{"type": "function", "function": self.schema}],
-                tool_choice={"type": "function", "function": {"name": self.schema["name"]}},
-                max_completion_tokens=16384,
+                max_tokens=max_output,
             )
 
             processing_time = (datetime.now() - start_time).total_seconds()
             log_cache_analysis(response, self.agent_type.value)
 
-            tool_args = response.choices[0].message.tool_calls[0].function.arguments
-            extracted_data = json.loads(tool_args)
-            cleaned_data = self._clean_extracted_data(extracted_data)
+            # ── Parse response ────────────────────────────────────────────────
+            # extract_content() handles all known Bedrock response shapes
+            raw_text      = BedrockClient.extract_content(response)
+            extracted_data = self._extract_json_from_text(raw_text)
+            cleaned_data   = self._clean_extracted_data(extracted_data)
 
             logger.info(
                 f"✅ {self.agent_type.value.title()} Agent: Extraction successful "
@@ -1038,13 +1276,12 @@ class MultiAgentResumeProcessor:
     Orchestrates multiple specialized agents for parallel resume processing.
     """
 
-    def __init__(self, client: AsyncOpenAI):
+    def __init__(self, client: BedrockClient):
         self.client = client
 
     async def process_resume_with_agents(
         self,
         raw_text: str,
-        model: str = 'gpt-5-mini',
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """Process resume using multiple specialized agents in parallel."""
         logger.info("Starting resume processing...")
@@ -1079,9 +1316,9 @@ class MultiAgentResumeProcessor:
             # Prepare inputs for each agent
             agent_inputs = self._prepare_agent_inputs(agents, sections, raw_text)
 
-            # Run all agents in parallel
+            # Run all agents in parallel – model is configured inside BedrockClient
             agent_tasks = [
-                agent.process(agent_inputs['inputs'][agent.agent_type], model)
+                agent.process(agent_inputs['inputs'][agent.agent_type])
                 for agent in agents
             ]
             results = await asyncio.gather(*agent_tasks, return_exceptions=True)

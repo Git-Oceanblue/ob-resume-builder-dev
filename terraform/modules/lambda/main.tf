@@ -50,7 +50,7 @@ resource "aws_lambda_function" "backend" {
   environment {
     variables = {
       ENVIRONMENT     = var.environment,
-      OPENAI_API_KEY  = var.openai_api_key
+      BEDROCK_API_KEY = var.bedrock_api_key
     }
   }
 

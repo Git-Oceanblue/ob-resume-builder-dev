@@ -54,5 +54,5 @@ module "lambda" {
   function_name = "resume-auto-backend-${var.environment}"
   environment   = var.environment
   lambda_zip_path = var.lambda_zip_path
-  openai_api_key  = var.openai_api_key
+  bedrock_api_key = var.bedrock_api_key
 }

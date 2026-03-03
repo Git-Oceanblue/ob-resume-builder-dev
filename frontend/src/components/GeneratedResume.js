@@ -1626,12 +1626,18 @@ const GeneratedResume = ({ resumeData }) => {
                 ]
               }),
 
-              // Professional Summary Content — plain paragraphs, no bullets
-              ...(resumeData.professionalSummary || []).map(point => (
-                new Paragraph({
+              // Professional Summary Content — bullet points when multiple items
+              ...(resumeData.professionalSummary || []).map(point => {
+                const hasMultiple = (resumeData.professionalSummary || []).length > 1;
+                return new Paragraph({
                   alignment: AlignmentType.JUSTIFIED,
                   spacing: { before: 60 },
+                  ...(hasMultiple ? { indent: { left: 360, hanging: 200 } } : {}),
                   children: [
+                    ...(hasMultiple
+                      ? [new TextRun({ text: '\u2022  ', size: 22, font: "Calibri", color: '000000' })]
+                      : []
+                    ),
                     new TextRun({
                       text: point,
                       size: 22,
@@ -1639,8 +1645,8 @@ const GeneratedResume = ({ resumeData }) => {
                       color: '000000'
                     })
                   ]
-                })
-              )),
+                });
+              }),
 
               // Summary subsections - support both formats, no bullets
               ...(resumeData.summarySections || resumeData.subsections || []).flatMap(subsection => [
