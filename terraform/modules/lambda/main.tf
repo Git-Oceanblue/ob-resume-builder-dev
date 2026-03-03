@@ -1,4 +1,33 @@
-# IAM role for Lambda function
+# Resolve account ID for globally-unique bucket naming
+data "aws_caller_identity" "current" {}
+
+# ── S3 bucket for Lambda deployment artifacts ────────────────────────────────
+# Lambda's direct-upload limit is 70 MB; deploying via S3 raises it to 250 MB.
+resource "aws_s3_bucket" "artifacts" {
+  bucket        = "${var.function_name}-artifacts-${data.aws_caller_identity.current.account_id}"
+  force_destroy = true
+}
+
+resource "aws_s3_bucket_public_access_block" "artifacts" {
+  bucket = aws_s3_bucket.artifacts.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+# Upload the Lambda zip to S3 before the function is created/updated.
+resource "aws_s3_object" "lambda_zip" {
+  bucket = aws_s3_bucket.artifacts.id
+  key    = "lambda.zip"
+  source = var.lambda_zip_path
+  etag   = filemd5(var.lambda_zip_path)
+
+  depends_on = [aws_s3_bucket_public_access_block.artifacts]
+}
+
+# ── IAM role for Lambda function ─────────────────────────────────────────────
 resource "aws_iam_role" "lambda_role" {
   name = "${var.function_name}-role"
 
@@ -47,14 +76,17 @@ resource "aws_iam_role_policy" "lambda_policy" {
 }
 
 resource "aws_lambda_function" "backend" {
-  filename         = var.lambda_zip_path
-  function_name    = var.function_name
-  role             = aws_iam_role.lambda_role.arn
-  handler          = "lambda_handler.lambda_handler"
-  runtime          = "python3.9"
-  timeout          = 300
-  memory_size      = 1024
+  # Deploy via S3 to bypass the 70 MB direct-upload limit (S3 limit is 250 MB).
+  s3_bucket        = aws_s3_object.lambda_zip.bucket
+  s3_key           = aws_s3_object.lambda_zip.key
   source_code_hash = filebase64sha256(var.lambda_zip_path)
+
+  function_name = var.function_name
+  role          = aws_iam_role.lambda_role.arn
+  handler       = "lambda_handler.lambda_handler"
+  runtime       = "python3.9"
+  timeout       = 300
+  memory_size   = 1024
 
   environment {
     variables = {
@@ -64,6 +96,7 @@ resource "aws_lambda_function" "backend" {
 
   depends_on = [
     aws_iam_role_policy.lambda_policy,
+    aws_s3_object.lambda_zip,
   ]
 }
 
@@ -71,7 +104,7 @@ resource "aws_lambda_function" "backend" {
 resource "aws_lambda_function_url" "backend_url" {
   function_name      = aws_lambda_function.backend.function_name
   authorization_type = "NONE"
-  invoke_mode       = "BUFFERED"
+  invoke_mode        = "BUFFERED"
 
   cors {
     allow_credentials = false
