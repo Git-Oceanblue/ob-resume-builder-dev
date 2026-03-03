@@ -50,8 +50,9 @@ module "cloudfront" {
 # Lambda function for backend
 module "lambda" {
   source = "./modules/lambda"
-  
-  function_name = "resume-auto-backend-${var.environment}"
-  environment   = var.environment
-  lambda_zip_path = var.lambda_zip_path
+
+  function_name         = "resume-auto-backend-${var.environment}"
+  environment           = var.environment
+  lambda_zip_path       = var.lambda_zip_path
+  lambda_layer_zip_path = var.lambda_layer_zip_path
 }

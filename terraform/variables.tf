@@ -20,7 +20,13 @@ variable "project_name" {
 }
 
 variable "lambda_zip_path" {
-  description = "Local path to the packaged Lambda zip (built by CI)"
+  description = "Local path to the packaged Lambda function code zip (built by CI)"
   type        = string
+}
+
+variable "lambda_layer_zip_path" {
+  description = "Optional local path to the Lambda Layer zip (Python dependencies). Leave empty to skip layer deployment."
+  type        = string
+  default     = ""
 }
 
