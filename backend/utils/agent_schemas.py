@@ -137,11 +137,11 @@ class ResumeAgentSchemas:
                                     "type": "string",
                                     "pattern": "^[A-Za-z\\s]+, [A-Za-z\\s]+$",
                                     "description": (
-                                        "CRITICAL LOCATION FORMAT: 'City, State/Country' with COMMA + SINGLE SPACE.\n"
-                                        "USA: use 2-letter state abbreviation.  CORRECT: 'Dallas, TX', 'New York, NY'\n"
-                                        "India: use ONLY 'City, India' – DO NOT include state codes like 'KA', 'TN', 'MH'.\n"
-                                        "  CORRECT: 'Hyderabad, India'   WRONG: 'Hyderabad, Telangana, India'\n"
-                                        "Other: 'City, CountryName'. CORRECT: 'London, UK', 'Toronto, Canada'\n\n"
+                                        "CRITICAL LOCATION FORMAT: 'State/Country' .\n"
+                                        "USA: use 2-letter state abbreviation.  CORRECT: 'TX', 'NY'\n"
+                                        "India: use ONLY 'India' – DO NOT include state codes like 'KA', 'TN', 'MH'.\n"
+                                        "  CORRECT: 'India'   WRONG: 'Hyderabad, Telangana, India'\n"
+                                        "Other: 'State'. CORRECT: 'OH', 'WI'\n\n"
                                         "EMBEDDED LOCATION RULE: If the job location is NOT listed separately but IS "
                                         "embedded in the company name (e.g. 'IBM India Pvt Ltd, Hyderabad, India'), "
                                         "extract the city and country from the company name.\n"
@@ -539,6 +539,16 @@ class ResumeAgentSchemas:
                                         "CORRECT: 'Jun 2026'\n"
                                         "Extract from labels: 'Expires:', 'Expiration:', 'Valid until:', etc.\n"
                                         "If no expiration or not mentioned, leave EMPTY."
+                                    )
+                                },
+
+                                "credentialUrl": {
+                                    "type": "string",
+                                    "description": (
+                                        "URL to the credential verification page, if explicitly stated.\n"
+                                        "EXAMPLE: 'https://www.credly.com/badges/abc123'\n"
+                                        "Only populate when a URL is EXPLICITLY provided in the text.\n"
+                                        "If not mentioned, leave EMPTY."
                                     )
                                 }
                             }

@@ -15,6 +15,12 @@ from .openai_client import OpenAIClient
 from .agent_schemas import ResumeAgentSchemas
 from .token_logger import start_timing, log_cache_analysis
 from .chunk_resume import strip_bullet_prefix
+from .validation_schemas import (
+    score_employment_entry,
+    score_certification_entry,
+    EmploymentHistoryOut,
+    CertificationsOut,
+)
 
 load_dotenv(find_dotenv())
 
@@ -524,7 +530,265 @@ def validate_project_not_fabricated(
     return True
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# EMPLOYMENT DEDUPLICATION
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _normalize_for_dedup(s: str) -> str:
+    """Normalise a string for deduplication key comparison."""
+    return re.sub(r'\s+', ' ', (s or '').lower().strip())
+
+
+def _deduplicate_employment_history(
+    jobs: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    Remove duplicate employment entries.
+
+    Two entries are considered duplicates when they share the same
+    normalised (company, workPeriod, roleName) triplet.  The first
+    occurrence is kept; subsequent duplicates are dropped with a warning.
+
+    Rationale: the LLM sometimes emits the same job block twice when a
+    resume has repeated section headers or the experience section appears
+    across chunk boundaries.
+    """
+    seen: set = set()
+    deduped: List[Dict[str, Any]] = []
+
+    for job in jobs:
+        if not isinstance(job, dict):
+            continue
+
+        key = (
+            _normalize_for_dedup(job.get('companyName', '')),
+            _normalize_for_dedup(job.get('workPeriod', '')),
+            _normalize_for_dedup(job.get('roleName', '')),
+        )
+
+        if key in seen:
+            logger.warning(
+                "[dedup] Dropping duplicate employment entry: '%s' / '%s' (%s)",
+                job.get('companyName'), job.get('roleName'), job.get('workPeriod'),
+            )
+            continue
+
+        seen.add(key)
+        deduped.append(job)
+
+    if len(deduped) < len(jobs):
+        logger.info(
+            "[dedup] Removed %d duplicate job entr(ies); kept %d.",
+            len(jobs) - len(deduped), len(deduped),
+        )
+
+    return deduped
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CERTIFICATION TABLE PARSER
+#
+# Two table formats emerge from file_parser.py depending on which extractor runs:
+#
+#  1. DOCX XML path (primary):  each table cell is its own paragraph line,
+#     so a 5-column table appears as N×5 consecutive lines in row-major order:
+#
+#       Certification                           ← header col 0
+#       Issued By                               ← header col 1
+#       Date Obtained (MM/YY)                   ← header col 2
+#       Certification Number (If Applicable)    ← header col 3
+#       Expiration Date (If Applicable)         ← header col 4
+#       Salesforce Certified Administrator      ← data row 1, col 0
+#       Salesforce                              ← data row 1, col 1
+#       03/2021                                 ← data row 1, col 2
+#       -                                       ← data row 1, col 3
+#       -                                       ← data row 1, col 4
+#
+#  2. python-docx fallback:  cells in each row are pipe-joined:
+#       "Salesforce Certified Administrator | Salesforce | 03/2021 | - | -"
+#
+# The parser auto-detects the format and builds cert dicts directly—no LLM
+# involved, so there is zero hallucination risk for table-sourced certs.
+# ─────────────────────────────────────────────────────────────────────────────
+
 _DASH_RE = re.compile(r'^\s*-+\s*$')
+
+# Known column header patterns (index = canonical column position)
+_CERT_COL_PATTERNS: List = [
+    # col 0 — certification name
+    re.compile(r'^certif(?:ication|icate)(?:\s+name)?$', re.IGNORECASE),
+    # col 1 — issuing organisation
+    re.compile(
+        r'^(?:issued\s+by|issuer|issuing\s+org(?:anization)?|institution|provider)$',
+        re.IGNORECASE,
+    ),
+    # col 2 — date obtained
+    re.compile(
+        r'^date\s+(?:obtained|issued|earned|awarded|received)(?:\s*\(.*\))?$',
+        re.IGNORECASE,
+    ),
+    # col 3 — certification number / ID
+    re.compile(
+        r'^cert(?:ification)?\s*(?:number|no\.?|id|#)(?:\s*\(.*\))?$',
+        re.IGNORECASE,
+    ),
+    # col 4 — expiration date
+    re.compile(
+        r'^(?:expir(?:ation|y)\s+date|valid\s+(?:until|through)|expires?)(?:\s*\(.*\))?$',
+        re.IGNORECASE,
+    ),
+]
+_COL_FIELDS: List[str] = [
+    'name', 'issuedBy', 'dateObtained', 'certificationNumber', 'expirationDate',
+]
+
+
+def _col_idx_for_header(line: str) -> int:
+    """Return column index 0-4 if *line* is a known cert table header, else -1."""
+    stripped = line.strip()
+    for idx, pattern in enumerate(_CERT_COL_PATTERNS):
+        if pattern.match(stripped):
+            return idx
+    return -1
+
+
+def _build_cert_dict(
+    cells: List[str],
+    col_order: List[str],
+) -> Optional[Dict[str, str]]:
+    """
+    Map a list of raw cell strings to a cert dict using *col_order*.
+    Returns None when the name cell is empty or a dash placeholder.
+    """
+    cert: Dict[str, str] = {f: '' for f in _COL_FIELDS}
+    for ci, field in enumerate(col_order):
+        if ci < len(cells) and not field.startswith('_skip'):
+            cert[field] = cells[ci].strip()
+
+    name = cert.get('name', '')
+    if not name or _DASH_RE.match(name):
+        return None
+    return cert
+
+
+def _parse_pipe_cert_table(lines: List[str]) -> List[Dict[str, str]]:
+    """
+    Parse pipe-delimited certification tables (python-docx fallback format).
+
+    Expected shape per line:
+        Cert Name | Issuer | Date | Cert Number | Expiry
+    """
+    pipe_lines = [l for l in lines if '|' in l]
+    if not pipe_lines:
+        return []
+
+    col_order: List[str] = []
+    results: List[Dict[str, str]] = []
+
+    for line in pipe_lines:
+        cells = [c.strip() for c in line.split('|') if c.strip()]
+        if not cells:
+            continue
+
+        # ── Try to detect the header row ─────────────────────────────────────
+        if not col_order:
+            detected: List[Optional[str]] = []
+            for cell in cells:
+                idx = _col_idx_for_header(cell)
+                detected.append(_COL_FIELDS[idx] if idx >= 0 else None)
+
+            known_count = sum(1 for d in detected if d is not None)
+            # Accept as header when ≥1 known column AND first column is 'name'
+            if known_count >= 1 and detected and detected[0] == 'name':
+                col_order = [d or f'_skip_{ci}' for ci, d in enumerate(detected)]
+                continue  # skip the header row itself
+
+        # ── Fall back to positional mapping if no header found ────────────────
+        if not col_order:
+            col_order = _COL_FIELDS[:len(cells)]
+
+        cert = _build_cert_dict(cells, col_order)
+        if cert:
+            results.append(cert)
+
+    return results
+
+
+def _parse_sequential_cert_table(text: str) -> List[Dict[str, str]]:
+    """
+    Parse sequential cell-per-line certification tables (DOCX XML extractor format).
+
+    All table cells appear as individual lines in row-major order.  The parser:
+      1. Locates a consecutive block of lines that each match a known column header.
+      2. Uses the detected column count (N) to group subsequent lines into rows.
+      3. Builds a cert dict per row, skipping dash/empty name cells.
+    """
+    non_empty_lines = [l.strip() for l in text.split('\n') if l.strip()]
+
+    header_start = -1
+    col_order: List[str] = []
+
+    for i, line in enumerate(non_empty_lines):
+        idx = _col_idx_for_header(line)
+        if idx >= 0:
+            if header_start < 0:
+                header_start = i
+            col_order.append(_COL_FIELDS[idx])
+        elif col_order:
+            break  # header block ended
+
+    # Must have at least the 'name' column (col 0) to proceed
+    if not col_order or col_order[0] != 'name':
+        return []
+
+    n_cols = len(col_order)
+    data_lines = non_empty_lines[header_start + n_cols:]
+    results: List[Dict[str, str]] = []
+
+    for j in range(0, len(data_lines), n_cols):
+        row_cells = data_lines[j:j + n_cols]
+        if not row_cells:
+            break
+        cert = _build_cert_dict(row_cells, col_order)
+        if cert:
+            results.append(cert)
+
+    return results
+
+
+def parse_cert_table_from_text(text: str) -> List[Dict[str, str]]:
+    """
+    Detect and parse certification tables from raw resume text.
+
+    Tries pipe-separated format first (python-docx fallback), then sequential
+    cell-per-line format (DOCX XML primary extractor).  Returns [] when no
+    table structure is found so the LLM result is used as-is.
+
+    Each returned dict has exactly the keys defined in _COL_FIELDS:
+        name, issuedBy, dateObtained, certificationNumber, expirationDate
+    """
+    if not text:
+        return []
+
+    lines = text.split('\n')
+
+    pipe_results = _parse_pipe_cert_table(lines)
+    if pipe_results:
+        logger.info(
+            "[cert-table] %d cert(s) parsed from pipe-separated table",
+            len(pipe_results),
+        )
+        return pipe_results
+
+    seq_results = _parse_sequential_cert_table(text)
+    if seq_results:
+        logger.info(
+            "[cert-table] %d cert(s) parsed from sequential cell-per-line table",
+            len(seq_results),
+        )
+        return seq_results
+
+    return []
 
 
 def _clean_cert_field(value: Any) -> str:
@@ -786,11 +1050,13 @@ class ResumeAgent:
                 "• Populate keyTechnologies at project level (if a named project exists)\n"
                 "  or at job level (if no projects). NEVER leave both empty when\n"
                 "  responsibilities or a Technologies label exist.\n\n"
-                "LOCATION RULE:\n"
-                "• If role location is not listed separately, check if it is embedded "
-                "  in the company name (e.g. 'IBM India Pvt Ltd, Hyderabad, India').\n"
-                "• Extract city and country from company name when needed.\n"
-                "• India format: 'India'. USA format: 'ST'.\n\n"
+                "LOCATION RULE (ANTI-HALLUCINATION — STRICT):\n"
+                "• ONLY extract location if it is EXPLICITLY written in the resume text.\n"
+                "• DO NOT guess, infer, or assume any city, state, or country.\n"
+                "• If no location is stated for a role → leave location as empty string ''.\n"
+                "• If location is embedded in the company name string "
+                "  (e.g. 'IBM India Pvt Ltd, Hyderabad, India'), extract it from there.\n"
+                "• India format: 'City, India' only (no state codes). USA: 'City, ST'.\n\n"
                 "VENDOR NAME RULE (responsibility bullets only):\n"
                 "• Remove third-party vendor brand names (Gearset, Conga, MuleSoft, Copado) "
                 "  from responsibility bullet text where they appear after 'using', 'via', 'i.e'. "
@@ -967,7 +1233,8 @@ Return ONLY this JSON object (no other text):
       "issuedBy": "<issuing organisation if explicitly stated, else empty string>",
       "dateObtained": "<MMM YYYY if stated, else empty string>",
       "certificationNumber": "<ID/number if explicitly given, else empty string>",
-      "expirationDate": "<MMM YYYY if stated, else empty string>"
+      "expirationDate": "<MMM YYYY if stated, else empty string>",
+      "credentialUrl": "<URL if explicitly given, else empty string>"
     }
   ]
 }
@@ -981,6 +1248,7 @@ CRITICAL RULES:
 • Deduplicate: if the same cert appears twice, include it once only.
 • Each certification is a separate object in the array.
 • ONLY the credential title goes in "name" – no other data.
+• credentialUrl: only populate if a URL (http/https) is explicitly present.
 • If no certifications exist in the text, return { "certifications": [] }.""",
         }
         return schemas[self.agent_type]
@@ -1114,9 +1382,18 @@ CRITICAL RULES:
 
             # ── Parse response ────────────────────────────────────────────────
             # extract_content() parses the normalised OpenAI response dict
-            raw_text      = OpenAIClient.extract_content(response)
+            raw_text       = OpenAIClient.extract_content(response)
             extracted_data = self._extract_json_from_text(raw_text)
-            cleaned_data   = self._clean_extracted_data(extracted_data)
+            cleaned_data   = self._clean_extracted_data(extracted_data, source_text=input_text)
+
+            # ── Certification table augmentation ──────────────────────────────
+            # Run the deterministic Python table parser alongside the LLM.
+            # Table-sourced certs have zero hallucination risk; they are merged
+            # into (and take priority over) the LLM results for any matching row.
+            if self.agent_type == AgentType.CERTIFICATIONS:
+                table_certs = parse_cert_table_from_text(input_text)
+                if table_certs:
+                    cleaned_data = self._merge_table_certs(cleaned_data, table_certs)
 
             logger.info(
                 f"✅ {self.agent_type.value.title()} Agent: Extraction successful "
@@ -1141,10 +1418,19 @@ CRITICAL RULES:
     # DATA CLEANING
     # ─────────────────────────────────────────────────────────────────────────
 
-    def _clean_extracted_data(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    def _clean_extracted_data(
+        self,
+        data: Dict[str, Any],
+        source_text: str = "",
+    ) -> Dict[str, Any]:
         """
         Clean bullet prefixes, run normalization functions, and apply all
         post-processing fixes.
+
+        Args:
+            data:        The raw dict parsed from the LLM JSON response.
+            source_text: The original input text sent to this agent.
+                         Used to populate rawTextBackup on low-confidence entries.
 
         Every loop that iterates over LLM-returned arrays guards with
         isinstance(..., dict) so a stray string entry never raises
@@ -1172,13 +1458,12 @@ CRITICAL RULES:
         # ── EXPERIENCE ───────────────────────────────────────────────────────
         elif self.agent_type == AgentType.EXPERIENCE and data.get('employmentHistory'):
 
-            # Ensure employmentHistory is actually a list; wrap a stray dict;
-            # discard if the LLM returned a plain string.
+            # ── Type guard: ensure employmentHistory is a list ────────────────
             emp_history = data['employmentHistory']
             if isinstance(emp_history, str):
                 logger.warning(
                     "[GUARD] employmentHistory is a string, not a list – discarding. "
-                    f"Value: {emp_history[:80]}"
+                    "Value: %s", emp_history[:80]
                 )
                 data['employmentHistory'] = []
                 emp_history = []
@@ -1187,34 +1472,33 @@ CRITICAL RULES:
                 data['employmentHistory'] = emp_history
 
             for job in emp_history:
-                # Guard: skip any entry that is not a dict
+                # Skip any entry that is not a dict
                 if not isinstance(job, dict):
                     logger.warning(
-                        f"[GUARD] Skipping non-dict employmentHistory entry: "
-                        f"{type(job).__name__} → {str(job)[:80]}"
+                        "[GUARD] Skipping non-dict employmentHistory entry: %s → %s",
+                        type(job).__name__, str(job)[:80]
                     )
                     continue
 
-                # Normalise work period
+                # ── Normalise work period ─────────────────────────────────────
                 if job.get('workPeriod'):
                     job['workPeriod'] = normalize_work_period(job['workPeriod'])
 
-                # FIX 5c: If location is missing, try extracting from company name
-                # e.g. "IBM India Pvt Ltd, Hyderabad, India" → "Hyderabad, India"
+                # ── Location: extract from company name only when truly absent ─
+                # Never guess a location; only extract from an embedded string.
                 if not job.get('location') and job.get('companyName'):
                     extracted = extract_location_from_company_name(job['companyName'])
                     if extracted:
                         job['location'] = extracted
                         logger.info(
-                            f"[FIX 5c] Extracted location '{extracted}' from "
-                            f"company name '{job['companyName']}'"
+                            "[FIX 5c] Extracted location '%s' from company name '%s'",
+                            extracted, job['companyName']
                         )
 
-                # Normalise location
                 if job.get('location'):
                     job['location'] = normalize_location(job['location'])
 
-                # Strip bullet prefixes from responsibilities
+                # ── Responsibilities ──────────────────────────────────────────
                 if job.get('responsibilities') and isinstance(job['responsibilities'], list):
                     job['responsibilities'] = sanitize_responsibilities([
                         strip_bullet_prefix(item)
@@ -1222,7 +1506,7 @@ CRITICAL RULES:
                         if isinstance(item, str)
                     ])
 
-                # Normalise subsections
+                # ── Subsections ───────────────────────────────────────────────
                 if job.get('subsections') and isinstance(job['subsections'], list):
                     for subsection in job['subsections']:
                         if not isinstance(subsection, dict):
@@ -1234,16 +1518,26 @@ CRITICAL RULES:
                                 if isinstance(item, str)
                             ]
 
-                # Normalise projects
+                # ── Projects: normalise + validate ────────────────────────────
                 if job.get('projects') and isinstance(job['projects'], list):
+                    validated_projects: List[Dict[str, Any]] = []
                     for project in job['projects']:
-                        # Guard: skip non-dict project entries
                         if not isinstance(project, dict):
                             logger.warning(
-                                f"[GUARD] Skipping non-dict project entry: "
-                                f"{type(project).__name__} → {str(project)[:80]}"
+                                "[GUARD] Skipping non-dict project entry: %s → %s",
+                                type(project).__name__, str(project)[:80]
                             )
                             continue
+
+                        # FIX #10: Validate project is not fabricated
+                        pname = project.get('projectName', '')
+                        if pname and not validate_project_not_fabricated(pname, source_text):
+                            logger.warning(
+                                "[FIX #10] Removing fabricated project '%s' "
+                                "from '%s'", pname, job.get('companyName', '?')
+                            )
+                            continue  # drop hallucinated project
+
                         if project.get('period'):
                             project['period'] = normalize_work_period(project['period'])
                         if project.get('projectLocation'):
@@ -1259,21 +1553,44 @@ CRITICAL RULES:
                                 if isinstance(item, str)
                             ])
 
-                # Strip non-dict projects from the list before calling enforce functions
-                if isinstance(job.get('projects'), list):
-                    job['projects'] = [p for p in job['projects'] if isinstance(p, dict)]
+                        validated_projects.append(project)
 
-                # ✅ FIX #4: Clear job-level tech/responsibilities when projects exist
+                    job['projects'] = validated_projects
+
+                # ── FIX #4: Clear job-level tech/resp when projects exist ─────
                 enforce_tech_responsibility_rules(job)
 
-                # ✅ FIX #3: Remove project periods duplicated from job workPeriod
+                # ── FIX #3: Remove project periods = job workPeriod ──────────
                 enforce_project_period_dedup(job)
 
-            # Remove any non-dict entries from the final list so downstream
-            # code never receives a string where a job dict is expected.
+                # ── Confidence scoring + rawTextBackup ────────────────────────
+                confidence = score_employment_entry(job)
+                job['_confidence'] = confidence
+                if confidence < 0.80 and source_text:
+                    job.setdefault('rawTextBackup', source_text[:2000])
+                    logger.warning(
+                        "[confidence] Low-confidence entry (%.2f) for '%s / %s' "
+                        "— rawTextBackup populated.",
+                        confidence, job.get('companyName'), job.get('roleName'),
+                    )
+
+            # ── Final list cleanup ────────────────────────────────────────────
+            # Remove non-dict entries
             data['employmentHistory'] = [
                 j for j in data['employmentHistory'] if isinstance(j, dict)
             ]
+
+            # ── Deduplication ─────────────────────────────────────────────────
+            data['employmentHistory'] = _deduplicate_employment_history(
+                data['employmentHistory']
+            )
+
+            # ── Pydantic schema validation pass ───────────────────────────────
+            # Validates field types and logs warnings; does not mutate valid data.
+            try:
+                EmploymentHistoryOut(employmentHistory=data['employmentHistory'])
+            except Exception as val_err:
+                logger.warning("[validation] Employment schema validation: %s", val_err)
 
         # ── EDUCATION ────────────────────────────────────────────────────────
         elif self.agent_type == AgentType.EDUCATION and data.get('education'):
@@ -1299,29 +1616,41 @@ CRITICAL RULES:
             if not isinstance(raw_certs, list):
                 raw_certs = []
 
-            cleaned_certs = []
+            cleaned_certs: List[Dict[str, Any]] = []
             seen_names: set = set()
 
             for cert in raw_certs:
                 if not isinstance(cert, dict):
                     continue
 
-                # Repair field bleed + strip dashes / whitespace
+                # ── Repair field bleed + strip dashes / whitespace ────────────
                 cert = extract_certification_fields(cert)
 
-                # Skip entries with no usable name after cleaning
+                # ── Skip entries with no usable name ─────────────────────────
                 name = cert.get('name', '').strip()
                 if not name:
                     logger.warning("[certifications] Dropping cert with empty name: %s", cert)
                     continue
 
-                # Normalise dates (after field repair, values are already clean strings)
+                # ── Normalise dates ───────────────────────────────────────────
                 if cert.get('dateObtained'):
                     cert['dateObtained'] = normalize_work_period(cert['dateObtained'])
                 if cert.get('expirationDate'):
                     cert['expirationDate'] = normalize_work_period(cert['expirationDate'])
 
-                # Deduplicate by normalised name (case-insensitive)
+                # ── Ensure credentialUrl field exists ─────────────────────────
+                cert.setdefault('credentialUrl', '')
+
+                # ── Confidence scoring + rawTextBackup ────────────────────────
+                confidence = score_certification_entry(cert)
+                if confidence < 0.50 and source_text:
+                    cert.setdefault('rawTextBackup', source_text[:1000])
+                    logger.warning(
+                        "[confidence] Low-confidence cert (%.2f) '%s' "
+                        "— rawTextBackup populated.", confidence, name
+                    )
+
+                # ── Deduplicate by normalised name ────────────────────────────
                 norm_key = name.lower()
                 if norm_key in seen_names:
                     logger.info("[certifications] Deduplicating cert: '%s'", name)
@@ -1332,7 +1661,70 @@ CRITICAL RULES:
 
             data['certifications'] = cleaned_certs
 
+            # ── Pydantic schema validation pass ───────────────────────────────
+            try:
+                CertificationsOut(certifications=data['certifications'])
+            except Exception as val_err:
+                logger.warning("[validation] Certification schema validation: %s", val_err)
+
         return data
+
+    def _merge_table_certs(
+        self,
+        llm_data: Dict[str, Any],
+        table_certs: List[Dict[str, str]],
+    ) -> Dict[str, Any]:
+        """
+        Merge table-parsed certifications into LLM-extracted data.
+
+        Table-sourced values for 'name' and 'issuedBy' are authoritative
+        (no hallucination possible).  For certs already found by the LLM,
+        the table values fill in any fields the LLM left blank.  New certs
+        only present in the table are appended.
+        """
+        existing: List[Dict[str, Any]] = llm_data.get('certifications', [])
+        if not isinstance(existing, list):
+            existing = []
+
+        # Build a lookup by normalised name for O(1) access
+        name_to_cert: Dict[str, Dict[str, Any]] = {}
+        for cert in existing:
+            if isinstance(cert, dict) and cert.get('name'):
+                name_to_cert[cert['name'].lower().strip()] = cert
+
+        added = 0
+        enriched = 0
+
+        for tc in table_certs:
+            # Run the same field-cleaning pipeline used for LLM certs
+            tc_clean = extract_certification_fields(dict(tc))
+            name = tc_clean.get('name', '').strip()
+            if not name:
+                continue
+
+            norm = name.lower()
+
+            if norm not in name_to_cert:
+                # New cert — append
+                existing.append(tc_clean)
+                name_to_cert[norm] = tc_clean
+                added += 1
+            else:
+                # Already present from LLM — enrich empty fields with table values
+                existing_cert = name_to_cert[norm]
+                for field in ('issuedBy', 'dateObtained', 'certificationNumber', 'expirationDate'):
+                    if not existing_cert.get(field) and tc_clean.get(field):
+                        existing_cert[field] = tc_clean[field]
+                        enriched += 1
+
+        if added or enriched:
+            logger.info(
+                "[cert-table] Merge complete — %d new cert(s) added, %d field(s) enriched",
+                added, enriched,
+            )
+
+        llm_data['certifications'] = existing
+        return llm_data
 
     def _create_error_result(
         self,
