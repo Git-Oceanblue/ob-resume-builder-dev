@@ -113,3 +113,7 @@ node_modules/
 
 # remove the virtual environment
 obrb/
+
+# removing the claude
+.claude/
+
