@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from dotenv import load_dotenv, find_dotenv
-from .bedrock_client import BedrockClient
+from .openai_client import OpenAIClient
 from .agent_schemas import ResumeAgentSchemas
 from .token_logger import start_timing, log_cache_analysis
 from .chunk_resume import strip_bullet_prefix
@@ -524,72 +524,99 @@ def validate_project_not_fabricated(
     return True
 
 
+_DASH_RE = re.compile(r'^\s*-+\s*$')
+
+
+def _clean_cert_field(value: Any) -> str:
+    """Return empty string for None, dash-only, or whitespace-only values."""
+    if not isinstance(value, str):
+        return ""
+    stripped = value.strip()
+    if not stripped or _DASH_RE.match(stripped):
+        return ""
+    return stripped
+
+
 def extract_certification_fields(cert: Dict[str, Any]) -> Dict[str, Any]:
     """
-    FIX #14: Post-process a certification dict to properly separate fields
-    that the LLM may have mixed into the 'name' field.
+    Post-process a certification dict to:
+      1. Strip whitespace and replace dash-only values with "" in all string fields.
+      2. Repair field bleed — when the LLM leaks issuer/date/number into 'name'.
 
-    Only repairs certs where issuer/date text has leaked into name.
+    Returns the cleaned cert dict (same reference, mutated in place).
     """
-    name = cert.get('name', '')
+    if not isinstance(cert, dict):
+        return {}
 
-    # Heuristic: if the name contains 'Issued' or 'issued', try to split it
+    # ── Step 1: clean every string field ─────────────────────────────────────
+    for field in ('name', 'issuedBy', 'dateObtained', 'certificationNumber', 'expirationDate'):
+        cert[field] = _clean_cert_field(cert.get(field, ''))
+
+    name = cert['name']
+    if not name:
+        return cert  # Nothing to repair
+
+    # ── Step 2: field-bleed repair ────────────────────────────────────────────
+    # Only attempt if the name contains metadata keywords
     if not re.search(r'\b(?:issued|obtained|date|expires?|expiration|number|#)\b',
                      name, re.IGNORECASE):
-        return cert  # Name looks clean, nothing to fix
+        return cert
 
     logger.warning(
-        f"[FIX #14] Certification name appears to contain extra fields: '{name}'. "
-        "Attempting field extraction."
+        "[cert-repair] Name field contains metadata keywords: '%s'. "
+        "Attempting field separation.", name
     )
 
-    # Extract clean cert name: text before the first occurrence of 'Issued' / date
+    # Extract clean cert name: text before first metadata keyword
     clean_name_match = re.match(
-        r'^(.+?)(?:\s+(?:Issued|issued|Obtained|obtained|From|from|Date|date|by)\b)',
-        name
+        r'^(.+?)(?:\s+(?:Issued|Obtained|From|Date|by)\b)',
+        name,
+        re.IGNORECASE,
     )
     if clean_name_match:
         cert['name'] = clean_name_match.group(1).strip(' -()')
 
-    # Extract issuer if not already present
-    if not cert.get('issuedBy'):
+    # Extract issuer if not already populated
+    if not cert['issuedBy']:
         issuer_m = re.search(
-            r'(?:Issued\s+by|issued\s+by|From|from|by)\s*[:\-]?\s*([^,\n(]+)',
-            name
+            r'(?:Issued\s+by|From|by)\s*[:\-]?\s*([^,\n(]+)',
+            name,
+            re.IGNORECASE,
         )
         if issuer_m:
-            cert['issuedBy'] = issuer_m.group(1).strip()
+            cert['issuedBy'] = _clean_cert_field(issuer_m.group(1))
 
-    # Extract date obtained if not already present
-    if not cert.get('dateObtained'):
+    # Extract date obtained if not already populated
+    if not cert['dateObtained']:
         date_m = re.search(
-            r'(?:Obtained|obtained|Date|date|Issued)\s*[:\-]?\s*'
-            r'([A-Za-z]{3,}\s+\d{4}|\d{2}/\d{2,4})',
-            name
-        )
-        if date_m:
-            cert['dateObtained'] = date_m.group(1).strip()
-
-    # Extract cert number if not already present
-    if not cert.get('certificationNumber'):
-        num_m = re.search(
-            r'(?:Certification|certification|Number|number|ID|id|#)\s*[:\-]?\s*'
-            r'([A-Z0-9][A-Z0-9\-]+)',
-            name
-        )
-        if num_m:
-            cert['certificationNumber'] = num_m.group(1).strip()
-
-    # Extract expiration if not already present
-    if not cert.get('expirationDate'):
-        exp_m = re.search(
-            r'(?:Expir(?:es?|ation)|expires?)\s*[:\-]?\s*'
+            r'(?:Obtained|Date|Issued)\s*[:\-]?\s*'
             r'([A-Za-z]{3,}\s+\d{4}|\d{2}/\d{2,4})',
             name,
-            re.IGNORECASE
+            re.IGNORECASE,
+        )
+        if date_m:
+            cert['dateObtained'] = _clean_cert_field(date_m.group(1))
+
+    # Extract cert number if not already populated
+    if not cert['certificationNumber']:
+        num_m = re.search(
+            r'(?:Number|ID|#)\s*[:\-]?\s*([A-Z0-9][A-Z0-9\-]+)',
+            name,
+            re.IGNORECASE,
+        )
+        if num_m:
+            cert['certificationNumber'] = _clean_cert_field(num_m.group(1))
+
+    # Extract expiration if not already populated
+    if not cert['expirationDate']:
+        exp_m = re.search(
+            r'(?:Expir(?:es?|ation))\s*[:\-]?\s*'
+            r'([A-Za-z]{3,}\s+\d{4}|\d{2}/\d{2,4})',
+            name,
+            re.IGNORECASE,
         )
         if exp_m:
-            cert['expirationDate'] = exp_m.group(1).strip()
+            cert['expirationDate'] = _clean_cert_field(exp_m.group(1))
 
     return cert
 
@@ -682,7 +709,7 @@ class ResumeAgent:
     Individual resume processing agent with specialized extraction capabilities
     """
 
-    def __init__(self, client: BedrockClient, agent_type: AgentType):
+    def __init__(self, client: OpenAIClient, agent_type: AgentType):
         self.client     = client
         self.agent_type = agent_type
         # schema kept for reference only – not sent to the model
@@ -763,7 +790,7 @@ class ResumeAgent:
                 "• If role location is not listed separately, check if it is embedded "
                 "  in the company name (e.g. 'IBM India Pvt Ltd, Hyderabad, India').\n"
                 "• Extract city and country from company name when needed.\n"
-                "• India format: 'City, India'. USA format: 'City, ST'.\n\n"
+                "• India format: 'India'. USA format: 'ST'.\n\n"
                 "VENDOR NAME RULE (responsibility bullets only):\n"
                 "• Remove third-party vendor brand names (Gearset, Conga, MuleSoft, Copado) "
                 "  from responsibility bullet text where they appear after 'using', 'via', 'i.e'. "
@@ -787,15 +814,38 @@ class ResumeAgent:
                 "Split each value list on commas into individual skill strings."
             ),
             AgentType.CERTIFICATIONS: (
-                "Extract ONLY certifications, licenses, and professional credentials.\n\n"
-                "TABLE FORMAT WARNING: The raw text may contain TABLE COLUMN HEADERS:\n"
-                "  'Certification', 'Issued By', 'Date Obtained (MM/YY)', "
-                "'Certification Number (If Applicable)', 'Expiration Date (If Applicable)'\n"
-                "These are LAYOUT LABELS – SKIP all of them.\n\n"
-                "DASH/EMPTY HANDLING: A '-' or '--' means the field is NOT PROVIDED. "
-                "Do NOT use '-' as a value. Treat it as empty string.\n\n"
-                "Put ONLY the certification title in the 'name' field. "
-                "Issuer, date, cert number, and expiry go in their dedicated fields."
+                "You are the Certification Extraction Agent.\n\n"
+                "TASK: Extract ONLY certifications, licenses, and professional credentials "
+                "that are EXPLICITLY present in the text. Think step-by-step.\n\n"
+                "CONSTRAINTS (strictly enforced):\n"
+                "• Do NOT infer, guess, or hallucinate certifications.\n"
+                "• Do NOT extract skills, degrees, awards, or job titles.\n"
+                "• Do NOT merge content from other resume sections.\n"
+                "• Do NOT invent issuing institutions — only extract if explicitly stated.\n"
+                "• If no certifications are present, return an empty array.\n\n"
+                "TABLE FORMAT: The text may contain TABLE COLUMN HEADERS such as:\n"
+                "  'Certification', 'Issued By', 'Date Obtained (MM/YY)',\n"
+                "  'Certification Number (If Applicable)', 'Expiration Date (If Applicable)'\n"
+                "  These are LAYOUT LABELS — SKIP them entirely.\n\n"
+                "DASH / EMPTY HANDLING:\n"
+                "• A '-' or '--' in any field means NOT PROVIDED. Use \"\" not \"-\".\n"
+                "• Blank or whitespace-only values must also be returned as \"\".\n\n"
+                "COMMA-SEPARATED CERTS: If multiple certifications appear on one line "
+                "separated by commas (e.g. 'Cert A, Cert B'), split into separate objects.\n\n"
+                "FIELD RULES:\n"
+                "• 'name'  — certification title ONLY. No issuer, no dates, no ID numbers.\n"
+                "• 'issuedBy' — issuing organisation only if explicitly stated; else \"\".\n"
+                "• 'dateObtained' — use MMM YYYY format; \"\" if not stated.\n"
+                "• 'certificationNumber' — ID/number if explicitly given; else \"\".\n"
+                "• 'expirationDate' — use MMM YYYY format; \"\" if not stated.\n\n"
+                "DUPLICATE HANDLING: If the same certification appears more than once "
+                "(e.g. in both a table row and a list), include it only once.\n\n"
+                "INTERNAL REASONING (before producing JSON, think through):\n"
+                "1. Which certifications are explicitly present?\n"
+                "2. Are they real or hallucinated?\n"
+                "3. Are they tied to an institution?\n"
+                "4. Are there duplicates or formatting artifacts?\n"
+                "5. Does the final JSON match the required schema?"
             ),
         }
 
@@ -913,20 +963,25 @@ Return ONLY this JSON object (no other text):
 {
   "certifications": [
     {
-      "name": "<certification title ONLY – no issuer, dates, or numbers here>",
-      "issuedBy": "<issuing organisation, or empty string>",
-      "dateObtained": "<MMM YYYY, or empty string>",
-      "certificationNumber": "<ID/number if given, or empty string>",
-      "expirationDate": "<MMM YYYY, or empty string>"
+      "name": "<certification title ONLY – no issuer, dates, or ID numbers here>",
+      "issuedBy": "<issuing organisation if explicitly stated, else empty string>",
+      "dateObtained": "<MMM YYYY if stated, else empty string>",
+      "certificationNumber": "<ID/number if explicitly given, else empty string>",
+      "expirationDate": "<MMM YYYY if stated, else empty string>"
     }
   ]
 }
 
-CRITICAL:
+CRITICAL RULES:
+• Return ONLY certifications explicitly present – never hallucinate.
+• Do NOT output skills, degrees, awards, or job titles.
 • Skip table column header lines: Certification, Issued By, Date Obtained, etc.
-• A dash (-) means the field is empty – use "" not "-".
+• A dash (-) or blank means the field is empty – always use "" not "-".
+• Comma-separated certs on one line must be split into separate objects.
+• Deduplicate: if the same cert appears twice, include it once only.
 • Each certification is a separate object in the array.
-• ONLY the credential title goes in "name".""",
+• ONLY the credential title goes in "name" – no other data.
+• If no certifications exist in the text, return { "certifications": [] }.""",
         }
         return schemas[self.agent_type]
 
@@ -1017,12 +1072,12 @@ CRITICAL:
         input_text: str,
     ) -> AgentResult:
         """
-        Extract one resume section via Bedrock InvokeModel.
+        Extract one resume section via OpenAI chat completions.
 
         Strategy (no tool/function calling):
           1. Build a user message that embeds the required JSON schema as text.
-          2. POST to Bedrock – request body: {"messages": [...], "max_tokens": N}
-          3. Extract the model's plain-text output via BedrockClient.extract_content().
+          2. POST to OpenAI – request body: {"messages": [...], "max_tokens": N}
+          3. Extract the model's plain-text output via OpenAIClient.extract_content().
           4. Parse the JSON with _extract_json_from_text() (handles fences, etc.).
           5. Apply existing normalisation / cleaning via _clean_extracted_data().
         """
@@ -1044,9 +1099,8 @@ CRITICAL:
             )
             user_message = f"{schema_instructions}\n\n{resume_block}"
 
-            # ── Bedrock InvokeModel ───────────────────────────────────────────
+            # ── OpenAI chat completions ───────────────────────────────────────
             # No 'tools' or 'tool_choice' – model is a pure text/JSON generator.
-            # The 'model' field is NOT included; it lives in the URL.
             response = await self.client.invoke(
                 messages=[
                     {"role": "system", "content": self._get_system_prompt()},
@@ -1059,8 +1113,8 @@ CRITICAL:
             log_cache_analysis(response, self.agent_type.value)
 
             # ── Parse response ────────────────────────────────────────────────
-            # extract_content() handles all known Bedrock response shapes
-            raw_text      = BedrockClient.extract_content(response)
+            # extract_content() parses the normalised OpenAI response dict
+            raw_text      = OpenAIClient.extract_content(response)
             extracted_data = self._extract_json_from_text(raw_text)
             cleaned_data   = self._clean_extracted_data(extracted_data)
 
@@ -1240,15 +1294,43 @@ CRITICAL:
                     category['subCategories'] = []
 
         # ── CERTIFICATIONS ───────────────────────────────────────────────────
-        elif self.agent_type == AgentType.CERTIFICATIONS and data.get('certifications'):
-            for cert in data['certifications']:
-                # Normalise dates
+        elif self.agent_type == AgentType.CERTIFICATIONS:
+            raw_certs = data.get('certifications', [])
+            if not isinstance(raw_certs, list):
+                raw_certs = []
+
+            cleaned_certs = []
+            seen_names: set = set()
+
+            for cert in raw_certs:
+                if not isinstance(cert, dict):
+                    continue
+
+                # Repair field bleed + strip dashes / whitespace
+                cert = extract_certification_fields(cert)
+
+                # Skip entries with no usable name after cleaning
+                name = cert.get('name', '').strip()
+                if not name:
+                    logger.warning("[certifications] Dropping cert with empty name: %s", cert)
+                    continue
+
+                # Normalise dates (after field repair, values are already clean strings)
                 if cert.get('dateObtained'):
                     cert['dateObtained'] = normalize_work_period(cert['dateObtained'])
                 if cert.get('expirationDate'):
                     cert['expirationDate'] = normalize_work_period(cert['expirationDate'])
-                # ✅ FIX #14: Repair mixed-up fields
-                cert = extract_certification_fields(cert)
+
+                # Deduplicate by normalised name (case-insensitive)
+                norm_key = name.lower()
+                if norm_key in seen_names:
+                    logger.info("[certifications] Deduplicating cert: '%s'", name)
+                    continue
+                seen_names.add(norm_key)
+
+                cleaned_certs.append(cert)
+
+            data['certifications'] = cleaned_certs
 
         return data
 
@@ -1276,7 +1358,7 @@ class MultiAgentResumeProcessor:
     Orchestrates multiple specialized agents for parallel resume processing.
     """
 
-    def __init__(self, client: BedrockClient):
+    def __init__(self, client: OpenAIClient):
         self.client = client
 
     async def process_resume_with_agents(
@@ -1316,7 +1398,7 @@ class MultiAgentResumeProcessor:
             # Prepare inputs for each agent
             agent_inputs = self._prepare_agent_inputs(agents, sections, raw_text)
 
-            # Run all agents in parallel – model is configured inside BedrockClient
+            # Run all agents in parallel – model is configured inside OpenAIClient
             agent_tasks = [
                 agent.process(agent_inputs['inputs'][agent.agent_type])
                 for agent in agents

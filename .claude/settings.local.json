@@ -4,7 +4,8 @@
       "Bash(python:*)",
       "Bash(obrb/Scripts/pip install:*)",
       "Bash(obrb/Scripts/pip show:*)",
-      "Bash(CI=false npm run:*)"
+      "Bash(CI=false npm run:*)",
+      "Bash(obrb/Scripts/python:*)"
     ]
   }
 }

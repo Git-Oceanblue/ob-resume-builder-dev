@@ -5,11 +5,11 @@ variable "aws_region" {
 }
 
 variable "environment" {
-  description = "Environment name (testing, prod)"
+  description = "Environment name (dev, prod)"
   type        = string
   validation {
-    condition     = contains(["testing", "prod"], var.environment)
-    error_message = "Environment must be either 'testing' or 'prod'."
+    condition     = contains(["dev", "prod"], var.environment)
+    error_message = "Environment must be either 'dev' or 'prod'."
   }
 }
 
@@ -24,3 +24,8 @@ variable "lambda_zip_path" {
   type        = string
 }
 
+variable "openai_api_key" {
+  description = "OpenAI API key for the backend"
+  type        = string
+  sensitive   = true
+}

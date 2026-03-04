@@ -1,12 +1,10 @@
 """
-Token Logger Utility for Amazon Bedrock API calls.
+Token Logger Utility for OpenAI API calls.
 
-Migrated from OpenAI response objects to Bedrock JSON response dicts.
-
-Bedrock usage fields:
-    response["usage"]["inputTokens"]   – equivalent to prompt_tokens
-    response["usage"]["outputTokens"]  – equivalent to completion_tokens
-    response["usage"]["totalTokens"]   – equivalent to total_tokens
+OpenAI usage fields:
+    response["usage"]["prompt_tokens"]     – input tokens
+    response["usage"]["completion_tokens"] – output tokens
+    response["usage"]["total_tokens"]      – total tokens
 """
 
 import logging
@@ -18,24 +16,28 @@ logger = logging.getLogger(__name__)
 
 def calculate_cost(input_tokens: int, output_tokens: int, model: str) -> float:
     """
-    Calculate approximate cost of a Bedrock API call based on token counts.
+    Calculate approximate cost of an OpenAI API call based on token counts.
 
     Args:
         input_tokens:  Number of input (prompt) tokens.
         output_tokens: Number of output (completion) tokens.
-        model:         The Bedrock model ID string.
+        model:         The OpenAI model ID string.
 
     Returns:
         Estimated cost in USD.
     """
     pricing: Dict[str, Dict[str, float]] = {
-        'openai.gpt-oss-20b-1:0': {
+        'gpt-4o-mini': {
             'input':  0.00015,
             'output': 0.0006,
         },
+        'gpt-4o': {
+            'input':  0.005,
+            'output': 0.015,
+        },
     }
 
-    model_pricing = pricing.get(model, pricing['openai.gpt-oss-20b-1:0'])
+    model_pricing = pricing.get(model, pricing['gpt-4o-mini'])
     input_cost  = (input_tokens  / 1000) * model_pricing['input']
     output_cost = (output_tokens / 1000) * model_pricing['output']
     return input_cost + output_cost
@@ -45,13 +47,13 @@ def log_token_usage(
     response: Any,
     model: str,
     start_time: datetime,
-    operation: str = 'Bedrock API Call',
+    operation: str = 'OpenAI API Call',
 ) -> Dict[str, Any]:
     """
-    Log token usage from a Bedrock InvokeModel JSON response dict.
+    Log token usage from an OpenAI chat completions response dict.
 
-    Bedrock returns usage as:
-        {"usage": {"inputTokens": N, "outputTokens": N, "totalTokens": N}}
+    Expected shape:
+        {"usage": {"prompt_tokens": N, "completion_tokens": N, "total_tokens": N}}
     """
     empty = {
         'promptTokens':     0,
@@ -73,13 +75,9 @@ def log_token_usage(
     end_time      = datetime.now()
     call_duration = (end_time - start_time).total_seconds()
 
-    # Accept both response shapes:
-    #   Native Bedrock:      inputTokens / outputTokens / totalTokens
-    #   OpenAI-compat layer: prompt_tokens / completion_tokens / total_tokens
-    input_tokens  = (usage.get('inputTokens')     or usage.get('prompt_tokens')     or 0)
-    output_tokens = (usage.get('outputTokens')    or usage.get('completion_tokens') or 0)
-    total_tokens  = (usage.get('totalTokens')     or usage.get('total_tokens')
-                     or input_tokens + output_tokens)
+    input_tokens  = usage.get('prompt_tokens',     0)
+    output_tokens = usage.get('completion_tokens', 0)
+    total_tokens  = usage.get('total_tokens',      input_tokens + output_tokens)
     cost          = calculate_cost(input_tokens, output_tokens, model)
 
     logger.info(
@@ -99,12 +97,7 @@ def log_token_usage(
 
 
 def start_timing() -> datetime:
-    """
-    Start timing a Bedrock API call.
-
-    Returns:
-        The current datetime as the start timestamp.
-    """
+    """Start timing an API call."""
     return datetime.now()
 
 
@@ -113,10 +106,7 @@ def log_cache_analysis(
     section_name: Optional[str] = None,
 ) -> None:
     """
-    Log basic token usage from a Bedrock InvokeModel JSON response dict.
-
-    Note: Bedrock does not expose a prompt-cache hit rate the way OpenAI does.
-    This function logs input/output token counts for observability instead.
+    Log basic token usage from an OpenAI response dict.
     """
     if not isinstance(response, dict):
         return
@@ -125,9 +115,9 @@ def log_cache_analysis(
     if not usage:
         return
 
-    input_tokens  = usage.get('inputTokens',  0)
-    output_tokens = usage.get('outputTokens', 0)
-    total_tokens  = usage.get('totalTokens',  input_tokens + output_tokens)
+    input_tokens  = usage.get('prompt_tokens',     0)
+    output_tokens = usage.get('completion_tokens', 0)
+    total_tokens  = usage.get('total_tokens',      input_tokens + output_tokens)
     context       = f" ({section_name})" if section_name else ""
 
     logger.info(f"📈 TOKEN USAGE{context}:")

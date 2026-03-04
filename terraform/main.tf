@@ -9,10 +9,8 @@ terraform {
 
   backend "s3" {
     bucket = "resumes-auto-terraform-state"
+    key    = "terraform.tfstate"
     region = "us-east-2"
-    # key is injected per-environment at terraform init via -backend-config:
-    #   dev:     -backend-config="key=env/dev/terraform.tfstate"
-    #   testing: -backend-config="key=env/testing/terraform.tfstate"
   }
 }
 
@@ -56,4 +54,5 @@ module "lambda" {
   function_name = "resume-auto-backend-${var.environment}"
   environment   = var.environment
   lambda_zip_path = var.lambda_zip_path
+  openai_api_key  = var.openai_api_key
 }

@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Dict, Any, AsyncGenerator
 from dotenv import load_dotenv, find_dotenv
 
-from .bedrock_client import BedrockClient
+from .openai_client import OpenAIClient
 from .chunk_resume import chunk_resume_from_bold_headings
 
 # Load .env from the nearest .env file found by traversing parent directories
@@ -14,23 +14,16 @@ logger = logging.getLogger(__name__)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CLIENT INITIALISATION
-# Auth is handled by the IAM role attached to this process (Lambda execution
-# role in production, ~/.aws/credentials or AWS_* env vars locally).
-# No API key is required — boto3 signs requests with SigV4 automatically.
 # ─────────────────────────────────────────────────────────────────────────────
 
-_bedrock_region = os.getenv('BEDROCK_REGION')
-if not _bedrock_region:
-    logger.warning("⚠️  BEDROCK_REGION env var not set — falling back to us-east-2. "
-                   "Ensure the Lambda IAM policy allows bedrock:InvokeModel in this region.")
-    _bedrock_region = 'us-east-2'
+_api_key = os.getenv('OPENAI_API_KEY', '')
+if not _api_key:
+    logger.warning("⚠️  OPENAI_API_KEY env var not set — API calls will fail.")
 
-client = BedrockClient(
-    model_id=os.getenv('BEDROCK_MODEL_ID', 'openai.gpt-oss-20b-1:0'),
-    region=_bedrock_region,
+client = OpenAIClient(
+    model_id=os.getenv('OPENAI_MODEL_ID', 'gpt-4o-mini'),
+    api_key=_api_key,
 )
-logger.info("✅ BedrockClient initialised (IAM auth) — model=%s region=%s",
-            client.model_id, client.region)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

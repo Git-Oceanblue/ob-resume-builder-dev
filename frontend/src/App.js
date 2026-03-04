@@ -99,69 +99,6 @@ function App() {
           <div className="h-full overflow-y-auto">
             <div className="container mx-auto px-6 py-10 max-w-5xl">
 
-              {/* Hero */}
-              <div className="text-center mb-10 animate-fade-in">
-                <div className="inline-flex items-center justify-center w-16 h-16 bg-gradient-to-br from-ocean-dark to-ocean-blue rounded-2xl shadow-xl mb-5 ring-4 ring-ocean-blue/20">
-                  <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                      d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                  </svg>
-                </div>
-                <h2 className="text-4xl font-extrabold text-ocean-dark mb-3 tracking-tight">
-                  Resume Automation
-                </h2>
-                <p className="text-lg text-gray-500 max-w-xl mx-auto leading-relaxed">
-                  Upload your resume — AI extracts every detail and lets you edit alongside a live preview
-                </p>
-              </div>
-
-              {/* Feature cards */}
-              <div className="grid grid-cols-3 gap-5 mb-10 animate-slide-up">
-                {[
-                  {
-                    icon: '🤖',
-                    title: 'AI Extraction',
-                    desc: 'Multi-agent AI parses every section with high accuracy',
-                    gradient: 'from-blue-500 to-cyan-400',
-                    ring: 'ring-blue-100',
-                  },
-                  {
-                    icon: '✏️',
-                    title: 'Live Editing',
-                    desc: 'Edit your resume alongside a real-time visual preview',
-                    gradient: 'from-indigo-500 to-purple-400',
-                    ring: 'ring-indigo-100',
-                  },
-                  {
-                    icon: '📄',
-                    title: 'Word Export',
-                    desc: 'Download a polished, formatted .docx in one click',
-                    gradient: 'from-emerald-500 to-teal-400',
-                    ring: 'ring-emerald-100',
-                  },
-                ].map((f, i) => (
-                  <div
-                    key={i}
-                    className="bg-white rounded-2xl p-6 shadow-md border border-gray-100 hover:shadow-xl hover:-translate-y-1 transition-all duration-300 text-center group cursor-default"
-                  >
-                    <div className={`inline-flex items-center justify-center w-12 h-12 bg-gradient-to-br ${f.gradient} rounded-xl shadow-md mb-4 text-2xl ring-4 ${f.ring} group-hover:scale-110 transition-transform duration-300`}>
-                      {f.icon}
-                    </div>
-                    <h3 className="font-bold text-ocean-dark mb-1 text-base">{f.title}</h3>
-                    <p className="text-sm text-gray-500 leading-relaxed">{f.desc}</p>
-                  </div>
-                ))}
-              </div>
-
-              {/* Supported formats banner */}
-              <div className="flex items-center justify-center space-x-3 mb-8">
-                <span className="text-xs text-gray-400 font-medium uppercase tracking-wider">Supported formats</span>
-                {['PDF', 'DOCX', 'TXT'].map(fmt => (
-                  <span key={fmt} className="px-3 py-1 bg-white border border-gray-200 text-gray-600 rounded-full text-xs font-semibold shadow-sm">
-                    {fmt}
-                  </span>
-                ))}
-              </div>
 
               {/* Upload card */}
               <div className="bg-white rounded-2xl shadow-xl border border-gray-100 overflow-hidden p-8">
