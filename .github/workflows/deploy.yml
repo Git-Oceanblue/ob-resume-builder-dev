@@ -6,7 +6,7 @@ on:
   workflow_dispatch: {}
 
 env:
-  AWS_REGION: us-east-2   # Ohio — deployment region for all resources
+  AWS_REGION: us-east-2
 
 jobs:
   deploy:
@@ -26,8 +26,6 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # ── Build Lambda artifact (dependencies + code bundled together) ──────
-      # Uses Amazon Linux container to match the Lambda runtime exactly.
       - name: Build backend Lambda artifact (Amazon Linux)
         run: |
           set -e
@@ -37,23 +35,10 @@ jobs:
             -v "$PWD/dist":/out \
             -w /app \
             public.ecr.aws/sam/build-python3.9:latest \
-            /bin/sh -lc "
-              set -e
-              python3 -m pip install --upgrade pip --quiet
-              python3 -m pip install \
-                --only-binary=:all: \
-                --no-compile \
-                --quiet \
-                -r requirements.txt \
-                -t /app/.bundle
-              cp -r utils main.py lambda_handler.py /app/.bundle/
-              cd /app/.bundle
-              zip -r /out/lambda.zip . \
-                -x '*.pyc' \
-                -x '*/__pycache__/*' \
-                -x '.env' \
-                -x 'README.md'
-            "
+            /bin/sh -lc "python3 -m pip install --upgrade pip && \
+              python3 -m pip install --only-binary=:all: --no-compile -r requirements.txt -t /app/.bundle && \
+              cp -r utils main.py lambda_handler.py /app/.bundle/ && \
+              cd /app/.bundle && zip -r /out/lambda.zip . -x '*.pyc' '__pycache__/*' '.env' 'README.md'"
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -64,15 +49,11 @@ jobs:
         working-directory: terraform
         run: terraform init -input=false
 
-      # ── Terraform Apply ───────────────────────────────────────────────────
-      # openai_api_key is passed via TF_VAR_ env var (never appears in logs).
       - name: Terraform Apply
         working-directory: terraform
-        env:
-          TF_VAR_openai_api_key: ${{ secrets.OPENAI_API_KEY }}
         run: |
           terraform apply -auto-approve \
-            -var "environment=testing" \
+            -var "environment=test" \
             -var "lambda_zip_path=../dist/lambda.zip"
 
       - name: Export API URL output
@@ -81,17 +62,15 @@ jobs:
         run: |
           echo "api_url=$(terraform output -raw lambda_function_url)" >> $GITHUB_OUTPUT
 
-      # ── Build frontend against the live API URL ───────────────────────────
       - name: Build frontend
         working-directory: frontend
         env:
           REACT_APP_API_URL: ${{ steps.tf_outputs.outputs.api_url }}
-          CI: "false"
+          CI: "false"   
         run: |
           npm install
           npm run build
 
-      # ── Deploy frontend to S3 and invalidate CloudFront ──────────────────
       - name: Upload frontend to S3 and invalidate CloudFront
         working-directory: terraform
         run: |

@@ -33,6 +33,11 @@ resource "aws_iam_role_policy" "lambda_policy" {
           "logs:PutLogEvents"
         ],
         Resource = "arn:aws:logs:*:*:*"
+      },
+      {
+        Effect   = "Allow",
+        Action   = ["bedrock:InvokeModel"],
+        Resource = "arn:aws:bedrock:*::foundation-model/*"
       }
     ]
   })
@@ -50,8 +55,9 @@ resource "aws_lambda_function" "backend" {
 
   environment {
     variables = {
-      ENVIRONMENT     = var.environment,
-      OPENAI_API_KEY  = var.openai_api_key
+      ENVIRONMENT      = var.environment
+      BEDROCK_REGION   = "us-east-2"
+      BEDROCK_MODEL_ID = "openai.gpt-oss-20b-1:0"
     }
   }
 
