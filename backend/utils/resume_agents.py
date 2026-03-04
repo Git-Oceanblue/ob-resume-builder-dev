@@ -918,6 +918,48 @@ def extract_certification_fields(cert: Dict[str, Any]) -> Dict[str, Any]:
     return cert
 
 
+# ── Degree prefixes / abbreviations used to detect education entries ──────────
+_DEGREE_PREFIXES: tuple = (
+    "master of ", "bachelor of ", "doctor of ", "associate of ",
+    "master's ", "bachelor's ", "doctorate of ",
+)
+_DEGREE_ABBREV_RE = re.compile(
+    r'^\s*(m\.?s\.?|m\.?a\.?|b\.?s\.?|b\.?a\.?|mba|ph\.?d\.?|'
+    r'b\.?tech|m\.?tech|b\.?e\.?|m\.?e\.?|b\.?sc\.?|m\.?sc\.?)'
+    r'(\b|[\s,|/])',
+    re.IGNORECASE,
+)
+_GPA_RE = re.compile(r'\bgpa\b|\bcgpa\b|\b\d\.\d+\s*/\s*\d\.\d+\b', re.IGNORECASE)
+
+
+def _is_education_degree(cert: Dict[str, Any]) -> bool:
+    """
+    Return True if this cert dict looks like an education/degree entry that was
+    mistakenly extracted by the certifications agent.
+
+    Detects:
+    • Name starts with a full degree phrase  ("Master of Science …")
+    • Name starts with a degree abbreviation ("MS Data Analytics", "B.S. …")
+    • issuedBy contains a GPA/CGPA value    ("CGPA – 3.91/4.0")
+    """
+    name = (cert.get('name') or '').strip().lower()
+    issued_by = (cert.get('issuedBy') or '').strip()
+
+    # 1. Full degree phrase prefix
+    if any(name.startswith(prefix) for prefix in _DEGREE_PREFIXES):
+        return True
+
+    # 2. Degree abbreviation at the start
+    if _DEGREE_ABBREV_RE.match(name):
+        return True
+
+    # 3. issuedBy looks like a GPA value — dead giveaway it's education
+    if _GPA_RE.search(issued_by):
+        return True
+
+    return False
+
+
 def reorder_sections_to_standard(
     sections: Dict[str, Any]
 ) -> Dict[str, Any]:
@@ -1675,6 +1717,14 @@ CRITICAL RULES:
                 name = cert.get('name', '').strip()
                 if not name:
                     logger.warning("[certifications] Dropping cert with empty name: %s", cert)
+                    continue
+
+                # ── Drop education/degree entries misclassified as certs ──────
+                if _is_education_degree(cert):
+                    logger.warning(
+                        "[certifications] Dropping education entry mistaken for cert: '%s'",
+                        name,
+                    )
                     continue
 
                 # ── Normalise dates ───────────────────────────────────────────
