@@ -9,8 +9,10 @@ terraform {
 
   backend "s3" {
     bucket = "resumes-auto-terraform-state"
-    key    = "terraform.tfstate"
     region = "us-east-2"
+    # key is injected per-environment at terraform init via -backend-config:
+    #   dev:     -backend-config="key=env/dev/terraform.tfstate"
+    #   testing: -backend-config="key=env/testing/terraform.tfstate"
   }
 }
 

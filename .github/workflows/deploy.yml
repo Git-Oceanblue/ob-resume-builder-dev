@@ -47,7 +47,9 @@ jobs:
 
       - name: Terraform Init
         working-directory: terraform
-        run: terraform init -input=false
+        run: |
+          terraform init -input=false -reconfigure \
+            -backend-config="key=env/testing/terraform.tfstate"
 
       - name: Terraform Apply
         working-directory: terraform
