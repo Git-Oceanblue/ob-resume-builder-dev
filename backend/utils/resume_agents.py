@@ -1769,14 +1769,6 @@ CRITICAL RULES:
         llm_data: Dict[str, Any],
         table_certs: List[Dict[str, str]],
     ) -> Dict[str, Any]:
-        """
-        Merge table-parsed certifications into LLM-extracted data.
-
-        Table-sourced values for 'name' and 'issuedBy' are authoritative
-        (no hallucination possible).  For certs already found by the LLM,
-        the table values fill in any fields the LLM left blank.  New certs
-        only present in the table are appended.
-        """
         existing: List[Dict[str, Any]] = llm_data.get('certifications', [])
         if not isinstance(existing, list):
             existing = []
