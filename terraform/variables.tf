@@ -1,15 +1,15 @@
 variable "aws_region" {
   description = "AWS region for resources"
   type        = string
-  default     = "us-east-1"
+  default     = "us-east-2"
 }
 
 variable "environment" {
-  description = "Environment name (testing,prod)"
+  description = "Environment name (testing, prod)"
   type        = string
   validation {
-    condition     = contains(["testing","prod"], var.environment)
-    error_message = "Environment must be 'testing','prod'."
+    condition     = contains(["testing", "prod"], var.environment)
+    error_message = "Environment must be either 'testing' or 'prod'."
   }
 }
 
@@ -20,19 +20,12 @@ variable "project_name" {
 }
 
 variable "lambda_zip_path" {
-  description = "Local path to the packaged Lambda function code zip (built by CI)"
+  description = "Local path to the packaged Lambda zip (built by CI)"
   type        = string
 }
 
-variable "bedrock_region" {
-  description = "AWS region where Bedrock models are accessed"
+variable "openai_api_key" {
+  description = "OpenAI API key for the backend"
   type        = string
-  default     = "us-east-2"
+  sensitive   = true
 }
-
-variable "lambda_layer_zip_path" {
-  description = "Optional local path to the Lambda Layer zip (Python dependencies). Leave empty to skip layer deployment."
-  type        = string
-  default     = ""
-}
-

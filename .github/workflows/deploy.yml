@@ -6,7 +6,7 @@ on:
   workflow_dispatch: {}
 
 env:
-  AWS_REGION: us-east-1   # must match Terraform S3 backend region
+  AWS_REGION: us-east-2   # Ohio — deployment region for all resources
 
 jobs:
   deploy:
@@ -26,11 +26,9 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # ── Build 1: Lambda Layer (Python dependencies) ──────────────────────
-      # Packages are installed into /tmp/python/ inside the container.
-      # Lambda extracts layers to /opt/; Python finds packages at /opt/python/.
-      # This zip only needs to be re-uploaded when requirements.txt changes.
-      - name: Build Lambda Layer (Python dependencies)
+      # ── Build Lambda artifact (dependencies + code bundled together) ──────
+      # Uses Amazon Linux container to match the Lambda runtime exactly.
+      - name: Build backend Lambda artifact (Amazon Linux)
         run: |
           set -e
           mkdir -p dist
@@ -47,27 +45,9 @@ jobs:
                 --no-compile \
                 --quiet \
                 -r requirements.txt \
-                -t /tmp/python
-              cd /tmp
-              zip -r /out/layer.zip python -x '*.pyc' -x '*/__pycache__/*'
-            "
-
-      # ── Build 2: Lambda function code (application only) ─────────────────
-      # Only source files — no site-packages.
-      # Typically < 1 MB; fast to upload and deploy.
-      - name: Build Lambda function code
-        run: |
-          set -e
-          docker run --rm \
-            -v "$PWD/backend":/app \
-            -v "$PWD/dist":/out \
-            -w /app \
-            public.ecr.aws/sam/build-python3.9:latest \
-            /bin/sh -lc "
-              set -e
-              mkdir -p /tmp/code
-              cp -r utils main.py lambda_handler.py /tmp/code/
-              cd /tmp/code
+                -t /app/.bundle
+              cp -r utils main.py lambda_handler.py /app/.bundle/
+              cd /app/.bundle
               zip -r /out/lambda.zip . \
                 -x '*.pyc' \
                 -x '*/__pycache__/*' \
@@ -85,15 +65,15 @@ jobs:
         run: terraform init -input=false
 
       # ── Terraform Apply ───────────────────────────────────────────────────
-      # All required variables are supplied via -var flags.
-      # No interactive prompts; -auto-approve ensures non-blocking CI.
+      # openai_api_key is passed via TF_VAR_ env var (never appears in logs).
       - name: Terraform Apply
         working-directory: terraform
+        env:
+          TF_VAR_openai_api_key: ${{ secrets.OPENAI_API_KEY }}
         run: |
           terraform apply -auto-approve \
             -var "environment=testing" \
-            -var "lambda_zip_path=../dist/lambda.zip" \
-            -var "lambda_layer_zip_path=../dist/layer.zip"
+            -var "lambda_zip_path=../dist/lambda.zip"
 
       - name: Export API URL output
         id: tf_outputs

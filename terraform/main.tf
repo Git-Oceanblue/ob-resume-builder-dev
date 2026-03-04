@@ -8,9 +8,9 @@ terraform {
   }
 
   backend "s3" {
-    bucket = "resume-auto-terraform-state"
+    bucket = "resumes-auto-terraform-state"
     key    = "terraform.tfstate"
-    region = "us-east-1"
+    region = "us-east-2"
   }
 }
 
@@ -50,10 +50,9 @@ module "cloudfront" {
 # Lambda function for backend
 module "lambda" {
   source = "./modules/lambda"
-
-  function_name         = "resume-auto-backend-${var.environment}"
-  environment           = var.environment
-  lambda_zip_path       = var.lambda_zip_path
-  lambda_layer_zip_path = var.lambda_layer_zip_path
-  bedrock_region        = var.bedrock_region
+  
+  function_name = "resume-auto-backend-${var.environment}"
+  environment   = var.environment
+  lambda_zip_path = var.lambda_zip_path
+  openai_api_key  = var.openai_api_key
 }
