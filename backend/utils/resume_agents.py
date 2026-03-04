@@ -430,25 +430,59 @@ def extract_location_from_company_name(company_name: str) -> Optional[str]:
 
 def enforce_tech_responsibility_rules(job: Dict[str, Any]) -> Dict[str, Any]:
     """
-    FIX #4: If a job has projects, forcibly clear job-level keyTechnologies
-    and responsibilities to prevent duplicate data in the final resume.
+    FIX #4: If a job has projects, ensure all content lives inside the project
+    objects — never duplicated at the job level.
+
+    RESCUE LOGIC (prevents silent data loss):
+      When the LLM puts responsibility bullets at job level but also adds a
+      project name, the bullets must be MOVED into the project — not discarded.
+
+      Similarly, job-level keyTechnologies is moved into projects that have none.
+
+    Only clears job-level fields AFTER the rescue has been attempted.
     """
-    has_projects = bool(job.get('projects'))
+    projects = job.get('projects')
+    if not projects or not isinstance(projects, list):
+        return job
 
-    if has_projects:
-        if job.get('keyTechnologies'):
-            logger.warning(
-                f"[FIX #4] Projects exist for '{job.get('companyName', '?')}' "
-                "but keyTechnologies is still filled → clearing."
-            )
-            job['keyTechnologies'] = ""
+    company = job.get('companyName', '?')
 
-        if job.get('responsibilities'):
-            logger.warning(
-                f"[FIX #4] Projects exist for '{job.get('companyName', '?')}' "
-                "but responsibilities is still filled → clearing."
+    # ── Rescue job-level keyTechnologies → first project that has none ─────────
+    job_tech = (job.get('keyTechnologies') or '').strip()
+    if job_tech:
+        for proj in projects:
+            if isinstance(proj, dict) and not proj.get('keyTechnologies', '').strip():
+                proj['keyTechnologies'] = job_tech
+                logger.info(
+                    "[FIX #4] Moved job-level keyTechnologies into project '%s' for '%s'.",
+                    proj.get('projectName', '?'), company,
+                )
+                break
+        job['keyTechnologies'] = ""
+
+    # ── Rescue job-level responsibilities → first project that has none ────────
+    job_resps = job.get('responsibilities')
+    if isinstance(job_resps, list) and job_resps:
+        moved = False
+        for proj in projects:
+            if isinstance(proj, dict):
+                existing = proj.get('projectResponsibilities')
+                if not existing or not isinstance(existing, list) or len(existing) == 0:
+                    proj['projectResponsibilities'] = job_resps
+                    logger.info(
+                        "[FIX #4] Rescued %d job-level responsibility bullets into "
+                        "project '%s' for '%s'.",
+                        len(job_resps), proj.get('projectName', '?'), company,
+                    )
+                    moved = True
+                    break
+        if not moved:
+            logger.info(
+                "[FIX #4] All projects already have responsibilities for '%s' — "
+                "discarding %d redundant job-level bullets.",
+                company, len(job_resps),
             )
-            job['responsibilities'] = []
+        job['responsibilities'] = []
 
     return job
 
@@ -489,43 +523,42 @@ def validate_project_not_fabricated(
 
     Returns True if the project appears to be explicitly mentioned,
     False if it looks fabricated.
+
+    Format-agnostic: handles "Project N: Title", "Project: Title",
+    "Project Name: Title", bare project titles, etc.
     """
-    if not project_name or not job_text:
-        return False
+    if not project_name:
+        return True   # Empty name — let caller decide; don't block
+    if not job_text:
+        return True   # No source text — give benefit of doubt
 
     job_text_lower = job_text.lower()
-    project_name_lower = project_name.lower()
 
-    # Extract the actual project title between "Project N:" and the optional "/ Role"
-    name_match = re.search(r'project\s+\d+:\s*(.+?)(?:\s*/\s*.+)?$',
-                           project_name_lower)
-    if not name_match:
-        # If it doesn't even follow the format, flag it
-        logger.warning(
-            f"[FIX #10] Project name does not follow 'Project N: ...' format: "
-            f"'{project_name}'"
-        )
-        return False
-
-    actual_name = name_match.group(1).strip()
+    # Strip common project-label prefixes (format-agnostic)
+    clean = re.sub(r'^project\s*(?:name\s*)?(?:\d+\s*)?[:\-]?\s*',
+                   '', project_name, flags=re.IGNORECASE).strip()
+    # Strip optional "/ Role" suffix
+    clean = re.sub(r'\s*/\s*.+$', '', clean).strip()
+    clean_lower = clean.lower()
 
     # Split into meaningful terms (> 3 chars)
-    terms = [t for t in re.split(r'\W+', actual_name) if len(t) > 3]
+    terms = [t for t in re.split(r'\W+', clean_lower) if len(t) > 3]
     if not terms:
-        return False
+        return True  # No meaningful terms — give benefit of doubt
 
     found = sum(1 for t in terms if t in job_text_lower)
     confidence = found / len(terms)
 
     if confidence < 0.5:
         logger.warning(
-            f"[FIX #10] Project looks FABRICATED (score {confidence:.2f}): "
-            f"'{project_name}'"
+            "[FIX #10] Project looks FABRICATED (score %.2f): '%s'",
+            confidence, project_name
         )
         return False
 
     logger.debug(
-        f"[FIX #10] Project validated (score {confidence:.2f}): '{project_name}'"
+        "[FIX #10] Project validated (score %.2f): '%s'",
+        confidence, project_name
     )
     return True
 
@@ -947,7 +980,7 @@ class AgentType(Enum):
 _AGENT_MAX_TOKENS: Dict[AgentType, int] = {
     AgentType.HEADER:         4096,
     AgentType.SUMMARY:        8192,
-    AgentType.EXPERIENCE:     16384,
+    AgentType.EXPERIENCE:     16384,  # gpt-4o-mini hard cap is 16384 output tokens
     AgentType.EDUCATION:      4096,
     AgentType.SKILLS:         8192,
     AgentType.CERTIFICATIONS: 8192,
@@ -1023,19 +1056,29 @@ class ResumeAgent:
             ),
             AgentType.EXPERIENCE: (
                 "Extract ONLY employment history and work experience. Include ALL jobs with "
-                "complete details. Missing any job is unacceptable.\n\n"
-                "RESUME FORMAT: Job entries follow this structure:\n"
-                "  Company Name | Date Range\n"
-                "  Role Title | Location\n"
-                "  Project Name (explicit sub-project title)\n"
-                "  'Responsibilities'\n"
-                "  • Bullet points (responsibilities + inline tech mentions)\n\n"
-                "CRITICAL PROJECT EXTRACTION RULES:\n"
-                "• ONLY include 'projects' if the resume explicitly names specific projects.\n"
-                "• When projects exist, job-level 'responsibilities' and 'keyTechnologies' "
-                "  MUST be empty – all detail lives in the project objects.\n"
-                "• Number projects in DESCENDING order (most recent = highest number).\n"
-                "• Extract ALL projects – missing a project is a data-loss error.\n\n"
+                "COMPLETE details — every bullet, every project. Missing any content is "
+                "a critical data-loss error.\n\n"
+                "RESUME FORMAT — This resume may use a CLIENT-BASED format:\n"
+                "  'Client: CompanyName, City, State  StartDate – EndDate'\n"
+                "  OR 'Company Name, Location  Date Range'\n"
+                "  'Location : City, State'\n"
+                "  'Role: Job Title'  OR  'Roles Played: Job Title'\n"
+                "  'Technologies: ...'  OR  'Tools & Technologies: ...'\n"
+                "  'Project Name: ProjectTitle'  OR  'Project: ProjectTitle'\n"
+                "  'Project Description: ...'\n"
+                "  'Responsibilities:' or 'Responsibilities-'\n"
+                "  • Bullet point 1\n\n"
+                "EMPLOYER EXTRACTION:\n"
+                "• companyName = actual employer. Strip 'Client:' label. No location/date.\n"
+                "• For 'IBM India Pvt Ltd … Client: Lincoln Financial Group', employer is 'IBM India Pvt Ltd'.\n\n"
+                "PROJECT EXTRACTION RULES:\n"
+                "• Named project exists ONLY when explicitly labeled 'Project Name: X' or 'Project: X'.\n"
+                "• Use EXACTLY the project title as given — do NOT reformat or add 'Project N:' prefix.\n"
+                "• Extract ALL responsibility bullets under that project into projectResponsibilities.\n"
+                "• When project exists, job-level 'responsibilities' MUST be [] and keyTechnologies MUST be ''.\n"
+                "• 'Roles Played: X' is a ROLE TITLE, NOT a project name.\n"
+                "• 'Project Description: ...' is the projectDescription field.\n"
+                "• If NO explicit project label exists, use responsibilities=[] with all bullets, projects=[].\n\n"
                 "TECHNOLOGY EXTRACTION RULE (CRITICAL):\n"
                 "• STEP 1 — Explicit label (highest priority): Look for a line that begins\n"
                 "  with 'Technologies:', 'Tools & Technologies:', 'Key Technologies/Skills:',\n"
@@ -1156,17 +1199,17 @@ Return ONLY this JSON object (no other text):
 {
   "employmentHistory": [
     {
-      "companyName": "<company name>",
-      "roleName": "<job title>",
+      "companyName": "<employer name only – no location, no date, no 'Client:' prefix>",
+      "roleName": "<job title – from 'Role:' or 'Roles Played:' label>",
       "workPeriod": "<MMM YYYY - MMM YYYY>  or  <MMM YYYY - Till Date>",
-      "location": "<City, ST>  or  <City, Country>  (e.g. Dallas, TX  /  Hyderabad, India)",
+      "location": "<City, ST>  or  <City, Country>",
       "projects": [
         {
-          "projectName": "<Project N: ProjectTitle / Role>  e.g. Project 3: Portal Migration / Developer",
+          "projectName": "<EXACT project title as written in the resume, e.g. 'Demand to Renew'>",
           "projectLocation": "<City, Country or empty string>",
-          "projectResponsibilities": ["<bullet 1>", "<bullet 2>", "... ALL bullets"],
-          "projectDescription": "<one-sentence description>",
-          "keyTechnologies": "<Tech1, Tech2, Tech3 – infer from bullets if no explicit label>",
+          "projectResponsibilities": ["<bullet 1>", "<bullet 2>", "... ALL bullets without exception"],
+          "projectDescription": "<project description as written>",
+          "keyTechnologies": "<from Technologies: label, or infer from bullets>",
           "period": "<MMM YYYY - MMM YYYY or empty string if same as job period>"
         }
       ],
@@ -1177,13 +1220,15 @@ Return ONLY this JSON object (no other text):
   ]
 }
 
-RULES (strictly enforced):
-• Include ALL jobs – missing even one is unacceptable.
-• Jobs with explicit named projects → projects=[...], responsibilities=[], keyTechnologies=""
-• Jobs WITHOUT explicit named projects → projects=[], responsibilities=[...all bullets], keyTechnologies="Tech1, Tech2"
-• Number projects DESCENDING (most recent = highest number).
+STRICT RULES:
+• Include ALL jobs – missing even one is a critical error.
+• Jobs WITH 'Project Name: X' or 'Project: X' → projects=[{projectName: "X", projectResponsibilities: [...ALL bullets], ...}], responsibilities=[], keyTechnologies=""
+• Jobs WITHOUT explicit project label → projects=[], responsibilities=[...ALL bullets], keyTechnologies="Tech1, Tech2, ..."
+• projectName = EXACT title from resume. Do NOT add 'Project N:' prefix.
+• Extract EVERY responsibility bullet – omitting bullets is a data-loss error.
 • workPeriod format: 'MMM YYYY - MMM YYYY' or 'MMM YYYY - Till Date' (3-letter months only).
-• Location format: 'City, ST' (USA) or 'City, Country' (other).  India → 'City, India' only.""",
+• Location: 'City, ST' (USA) or 'City, Country'. India → 'City, India' only.
+• companyName must NOT contain location or date – strip 'Client:' prefix if present.""",
 
             AgentType.EDUCATION: """\
 Return ONLY this JSON object (no other text):
