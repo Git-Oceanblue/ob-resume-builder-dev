@@ -117,3 +117,6 @@ obrb/
 # removing the claude
 .claude/
 
+#removing the pychache files
+__pycache__/
+*.pyc
