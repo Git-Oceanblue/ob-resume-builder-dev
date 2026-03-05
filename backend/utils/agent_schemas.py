@@ -109,7 +109,8 @@ class ResumeAgentSchemas:
                                 },
                                 "roleName": {
                                     "type": "string",
-                                    "description": "Job title or role exactly as stated in the resume."
+                                    "description": ("Job title or role exactly as stated in the resume.\n"
+                                                    "If a job title or role is not explicitly mentioned in the resume, do not infer, assume, or generate one. Only extract and use information that is clearly stated in the resume. If the job title is missing, leave the field empty or mark it as 'Not Provided' instead of creating a new title.")
                                 },
 
                                 # ── Dates ────────────────────────────────────────────────
@@ -137,7 +138,7 @@ class ResumeAgentSchemas:
                                     "type": "string",
                                     "pattern": "^[A-Za-z\\s]+, [A-Za-z\\s]+$",
                                     "description": (
-                                        "CRITICAL LOCATION FORMAT: 'State/Country' .\n"
+                                        "CRITICAL LOCATION FORMAT: 'State' .\n"
                                         "USA: use 2-letter state abbreviation.  CORRECT: 'TX', 'NY'\n"
                                         "India: use ONLY 'India' – DO NOT include state codes like 'KA', 'TN', 'MH'.\n"
                                         "  CORRECT: 'India'   WRONG: 'Hyderabad, Telangana, India'\n"
@@ -145,7 +146,7 @@ class ResumeAgentSchemas:
                                         "EMBEDDED LOCATION RULE: If the job location is NOT listed separately but IS "
                                         "embedded in the company name (e.g. 'IBM India Pvt Ltd, Hyderabad, India'), "
                                         "extract the city and country from the company name.\n"
-                                        "EXAMPLE: Company='IBM India Pvt Ltd, Hyderabad, India' → location='Hyderabad, India'\n"
+                                        "EXAMPLE: Company='IBM India Pvt Ltd, Hyderabad, India' → location='India'\n"
                                         "If no location can be found, leave this field empty."
                                     )
                                 },
