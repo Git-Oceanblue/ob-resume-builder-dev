@@ -1644,6 +1644,18 @@ CRITICAL RULES:
         """
         start_time = start_timing()
 
+        # ── Short-circuit: no content to extract ─────────────────────────────
+        # _prepare_agent_inputs sets input_text='' when it detects the resume
+        # has zero cert-related content. Skip the LLM call entirely.
+        if not input_text and self.agent_type == AgentType.CERTIFICATIONS:
+            logger.info("ℹ️ Certifications Agent: Skipped — no cert content in resume")
+            return AgentResult(
+                agent_type=self.agent_type,
+                data={'certifications': []},
+                processing_time=0.0,
+                success=True,
+            )
+
         try:
             max_output = _AGENT_MAX_TOKENS[self.agent_type]
 
@@ -2095,12 +2107,14 @@ class MultiAgentResumeProcessor:
             at = agent.agent_type
             key = section_mapping[at]
 
-            # Certifications: prefer the chunked section; only fall back to a
-            # targeted slice of the full text when the chunker found nothing.
+            # Certifications: prefer the chunked section; fall back to a
+            # targeted slice; if the resume truly has no cert content at all,
+            # skip the LLM entirely and return empty certifications.
             if at == AgentType.CERTIFICATIONS:
                 cert_chunk = sections.get('certifications', '')
                 if isinstance(cert_chunk, str):
                     cert_chunk = cert_chunk.strip()
+
                 if cert_chunk:
                     agent_inputs[at] = cert_chunk
                     strategy[at.value] = 'chunked_section'
@@ -2109,20 +2123,37 @@ class MultiAgentResumeProcessor:
                         f"({len(cert_chunk)} chars)"
                     )
                 else:
-                    # Chunker found no cert section — extract only the cert
-                    # portion from the full resume to limit LLM exposure.
                     extracted = _extract_cert_text(raw_text)
-                    agent_inputs[at] = extracted
-                    strategy[at.value] = (
-                        'cert_section_extracted'
-                        if extracted != raw_text
-                        else 'full_resume_fallback'
-                    )
-                    logger.info(
-                        f"⚠️ Certifications Agent: No cert chunk found — "
-                        f"using {'extracted cert section' if extracted != raw_text else 'full resume'} "
-                        f"({len(extracted)} chars)"
-                    )
+                    if extracted != raw_text:
+                        # Found a cert heading — use the extracted slice only
+                        agent_inputs[at] = extracted
+                        strategy[at.value] = 'cert_section_extracted'
+                        logger.info(
+                            f"✅ Certifications Agent: Extracted cert section "
+                            f"({len(extracted)} chars)"
+                        )
+                    else:
+                        # Full resume fallback — check if ANY cert-like keyword
+                        # exists before sending to LLM. If not, skip entirely.
+                        _CERT_KEYWORD_RE = re.compile(
+                            r'\b(?:certif(?:ied|ication|icate)s?|licen[sc]e[ds]?|credential)\b',
+                            re.IGNORECASE,
+                        )
+                        if _CERT_KEYWORD_RE.search(raw_text):
+                            agent_inputs[at] = raw_text
+                            strategy[at.value] = 'full_resume_fallback'
+                            logger.warning(
+                                "⚠️ Certifications Agent: No cert section found — "
+                                f"sending full resume ({len(raw_text)} chars)"
+                            )
+                        else:
+                            # Resume has zero cert content — skip LLM call
+                            agent_inputs[at] = ''
+                            strategy[at.value] = 'skipped_no_cert_content'
+                            logger.info(
+                                "ℹ️ Certifications Agent: No certification "
+                                "content detected — skipping LLM call"
+                            )
                 continue
 
             if key in sections and sections.get(key) and sections[key].strip():
