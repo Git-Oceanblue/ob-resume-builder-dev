@@ -6,7 +6,7 @@ import logging
 import os
 import re
 from datetime import datetime
-from typing import Dict, List, Any, Optional, AsyncGenerator
+from typing import Dict, List, Any, Optional, AsyncGenerator, Tuple
 from dataclasses import dataclass
 from enum import Enum
 
@@ -619,209 +619,403 @@ def _deduplicate_employment_history(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CERTIFICATION TABLE PARSER
+# CERTIFICATION EXTRACTION PIPELINE
 #
-# Two table formats emerge from file_parser.py depending on which extractor runs:
+# Handles every cert format found in real resumes:
+#   • Pipe-delimited rows       (python-docx fallback)
+#   • Sequential cell-per-line  (DOCX XML primary extractor)
+#   • Bullet lists
+#   • Inline paragraphs         ("Certifications: A, B, C")
+#   • Heading + line-break      (plain consecutive lines)
 #
-#  1. DOCX XML path (primary):  each table cell is its own paragraph line,
-#     so a 5-column table appears as N×5 consecutive lines in row-major order:
-#
-#       Certification                           ← header col 0
-#       Issued By                               ← header col 1
-#       Date Obtained (MM/YY)                   ← header col 2
-#       Certification Number (If Applicable)    ← header col 3
-#       Expiration Date (If Applicable)         ← header col 4
-#       Salesforce Certified Administrator      ← data row 1, col 0
-#       Salesforce                              ← data row 1, col 1
-#       03/2021                                 ← data row 1, col 2
-#       -                                       ← data row 1, col 3
-#       -                                       ← data row 1, col 4
-#
-#  2. python-docx fallback:  cells in each row are pipe-joined:
-#       "Salesforce Certified Administrator | Salesforce | 03/2021 | - | -"
-#
-# The parser auto-detects the format and builds cert dicts directly—no LLM
-# involved, so there is zero hallucination risk for table-sourced certs.
+# Entry point: run_cert_extraction_pipeline(text, llm_raw_data)
+#   → returns (flat_certs, format_str, confidence)
 # ─────────────────────────────────────────────────────────────────────────────
 
 _DASH_RE = re.compile(r'^\s*-+\s*$')
 
-# Known column header patterns (index = canonical column position)
 _CERT_COL_PATTERNS: List = [
-    # col 0 — certification name
     re.compile(r'^certif(?:ication|icate)(?:\s+name)?$', re.IGNORECASE),
-    # col 1 — issuing organisation
-    re.compile(
-        r'^(?:issued\s+by|issuer|issuing\s+org(?:anization)?|institution|provider)$',
-        re.IGNORECASE,
-    ),
-    # col 2 — date obtained
-    re.compile(
-        r'^date\s+(?:obtained|issued|earned|awarded|received)(?:\s*\(.*\))?$',
-        re.IGNORECASE,
-    ),
-    # col 3 — certification number / ID
-    re.compile(
-        r'^cert(?:ification)?\s*(?:number|no\.?|id|#)(?:\s*\(.*\))?$',
-        re.IGNORECASE,
-    ),
-    # col 4 — expiration date
-    re.compile(
-        r'^(?:expir(?:ation|y)\s+date|valid\s+(?:until|through)|expires?)(?:\s*\(.*\))?$',
-        re.IGNORECASE,
-    ),
+    re.compile(r'^(?:issued\s+by|issuer|issuing\s+org(?:anization)?|institution|provider)$', re.IGNORECASE),
+    re.compile(r'^date\s+(?:obtained|issued|earned|awarded|received)(?:\s*\(.*\))?$', re.IGNORECASE),
+    re.compile(r'^cert(?:ification)?\s*(?:number|no\.?|id|#)(?:\s*\(.*\))?$', re.IGNORECASE),
+    re.compile(r'^(?:expir(?:ation|y)\s+date|valid\s+(?:until|through)|expires?)(?:\s*\(.*\))?$', re.IGNORECASE),
 ]
-_COL_FIELDS: List[str] = [
-    'name', 'issuedBy', 'dateObtained', 'certificationNumber', 'expirationDate',
-]
+_COL_FIELDS: List[str] = ['name', 'issuedBy', 'dateObtained', 'certificationNumber', 'expirationDate']
+
+SPLIT_THRESHOLD = 85   # split_confidence must reach this to expand grouped names
 
 
-def _col_idx_for_header(line: str) -> int:
-    """Return column index 0-4 if *line* is a known cert table header, else -1."""
-    stripped = line.strip()
-    for idx, pattern in enumerate(_CERT_COL_PATTERNS):
-        if pattern.match(stripped):
-            return idx
+def _col_idx(line: str) -> int:
+    """Return column index 0-4 if *line* matches a known cert table header, else -1."""
+    s = line.strip()
+    for i, p in enumerate(_CERT_COL_PATTERNS):
+        if p.match(s):
+            return i
     return -1
 
 
-def _build_cert_dict(
-    cells: List[str],
-    col_order: List[str],
-) -> Optional[Dict[str, str]]:
-    """
-    Map a list of raw cell strings to a cert dict using *col_order*.
-    Returns None when the name cell is empty or a dash placeholder.
-    """
-    cert: Dict[str, str] = {f: '' for f in _COL_FIELDS}
-    for ci, field in enumerate(col_order):
-        if ci < len(cells) and not field.startswith('_skip'):
-            cert[field] = cells[ci].strip()
-
-    name = cert.get('name', '')
-    if not name or _DASH_RE.match(name):
-        return None
-    return cert
+class CertFormat(str, Enum):
+    TABLE_SINGLE_ROW   = "TABLE_SINGLE_ROW"
+    TABLE_MULTI_ROW    = "TABLE_MULTI_ROW"
+    TABLE_SEQUENTIAL   = "TABLE_SEQUENTIAL"
+    BULLET_LIST        = "BULLET_LIST"
+    INLINE_PARAGRAPH   = "INLINE_PARAGRAPH"
+    HEADING_LINE_BREAK = "HEADING_LINE_BREAK"
+    MIXED              = "MIXED"
+    UNKNOWN            = "UNKNOWN"
 
 
-def _parse_pipe_cert_table(lines: List[str]) -> List[Dict[str, str]]:
-    """
-    Parse pipe-delimited certification tables (python-docx fallback format).
+@dataclass
+class CertGroup:
+    """Intermediate representation of one certification (or a row-grouped set)."""
+    issuer:              str                 = ""
+    certification_name:  Optional[str]       = None
+    certification_names: Optional[List[str]] = None
+    issue_date:          str                 = ""
+    expiration_date:     str                 = ""
+    credential_id:       str                 = ""
+    credential_url:      str                 = ""
+    inherited_issuer:    bool                = False
+    row_grouped:         bool                = False
+    split_confidence:    int                 = 100
+    raw_text_backup:     str                 = ""
 
-    Expected shape per line:
-        Cert Name | Issuer | Date | Cert Number | Expiry
-    """
-    pipe_lines = [l for l in lines if '|' in l]
+
+# ── Step 1: Format classifier ─────────────────────────────────────────────────
+
+def classify_cert_section(text: str) -> Tuple[CertFormat, int]:
+    """Detect the formatting style of a certification block."""
+    if not text or not text.strip():
+        return CertFormat.UNKNOWN, 0
+
+    lines       = [l.strip() for l in text.split('\n') if l.strip()]
+    total_lines = max(len(lines), 1)
+
+    pipe_lines = [l for l in lines if '|' in l and len(l.split('|')) >= 3]
+    if pipe_lines:
+        data_rows = [
+            l for l in pipe_lines
+            if not any(_col_idx(c.strip()) >= 0 for c in l.split('|') if c.strip())
+        ]
+        if len(data_rows) > 1:
+            return CertFormat.TABLE_MULTI_ROW, 92
+        return CertFormat.TABLE_SINGLE_ROW, 88
+
+    header_col_count = sum(1 for l in lines if _col_idx(l) >= 0)
+    if header_col_count >= 2:
+        return CertFormat.TABLE_SEQUENTIAL, 87
+
+    bullet_re    = re.compile(r'^[•\-\*●◦▪►✓\u2022\u2023\u25E6\u2043]')
+    bullet_count = sum(1 for l in lines if bullet_re.match(l))
+    if bullet_count / total_lines >= 0.4:
+        return CertFormat.BULLET_LIST, 90
+
+    joined = ' '.join(lines)
+    if re.search(r'certif\w*\s*:\s*\S', joined, re.IGNORECASE) and joined.count(',') >= 1:
+        confidence = min(75 + joined.count(',') * 3, 90)
+        return CertFormat.INLINE_PARAGRAPH, confidence
+
+    non_bullet = [l for l in lines if not bullet_re.match(l)]
+    if len(non_bullet) >= 2 and '|' not in text:
+        return CertFormat.HEADING_LINE_BREAK, 70
+
+    return CertFormat.UNKNOWN, 50
+
+
+# ── Step 2: Python table extractors ──────────────────────────────────────────
+
+def _split_cert_names_in_cell(cell_value: str) -> Tuple[List[str], int]:
+    """Split a comma-separated cell value into individual cert names."""
+    if ',' not in cell_value:
+        return [cell_value], 100
+    parts = [p.strip() for p in cell_value.split(',') if p.strip()]
+    if len(parts) <= 1:
+        return [cell_value], 100
+    valid = sum(1 for p in parts if len(p) >= 5 and re.match(r'^[A-Z\d]', p))
+    return parts, (90 if valid == len(parts) else 75)
+
+
+def _extract_pipe_groups(text: str) -> List[CertGroup]:
+    """Extract CertGroups from pipe-delimited rows."""
+    lines      = text.split('\n')
+    pipe_lines = [l for l in lines if '|' in l and len(l.split('|')) >= 3]
     if not pipe_lines:
         return []
 
     col_order: List[str] = []
-    results: List[Dict[str, str]] = []
+    groups:    List[CertGroup] = []
 
     for line in pipe_lines:
-        cells = [c.strip() for c in line.split('|') if c.strip()]
-        if not cells:
+        cells     = [_clean_cert_field(c) for c in line.split('|')]
+        non_empty = [c for c in cells if c]
+        if not non_empty:
             continue
 
-        # ── Try to detect the header row ─────────────────────────────────────
         if not col_order:
-            detected: List[Optional[str]] = []
-            for cell in cells:
-                idx = _col_idx_for_header(cell)
-                detected.append(_COL_FIELDS[idx] if idx >= 0 else None)
+            detected = [(_COL_FIELDS[_col_idx(c)] if _col_idx(c) >= 0 else None) for c in non_empty]
+            known    = sum(1 for d in detected if d is not None)
+            if known >= 1 and detected and detected[0] == 'name':
+                col_order = [d or f'_skip_{i}' for i, d in enumerate(detected)]
+                continue
 
-            known_count = sum(1 for d in detected if d is not None)
-            # Accept as header when ≥1 known column AND first column is 'name'
-            if known_count >= 1 and detected and detected[0] == 'name':
-                col_order = [d or f'_skip_{ci}' for ci, d in enumerate(detected)]
-                continue  # skip the header row itself
-
-        # ── Fall back to positional mapping if no header found ────────────────
         if not col_order:
-            col_order = _COL_FIELDS[:len(cells)]
+            col_order = _COL_FIELDS[:len(non_empty)]
 
-        cert = _build_cert_dict(cells, col_order)
-        if cert:
-            results.append(cert)
+        row_map: Dict[str, str] = {}
+        for ci, fld in enumerate(col_order):
+            if not fld.startswith('_skip') and ci < len(non_empty):
+                row_map[fld] = non_empty[ci]
 
-    return results
+        name_raw = row_map.get('name', '')
+        if not name_raw:
+            continue
+
+        cert_names, split_conf = _split_cert_names_in_cell(name_raw)
+        row_grouped = len(cert_names) > 1
+        groups.append(CertGroup(
+            issuer              = row_map.get('issuedBy', ''),
+            certification_name  = cert_names[0] if not row_grouped else None,
+            certification_names = cert_names    if row_grouped     else None,
+            issue_date          = row_map.get('dateObtained', ''),
+            expiration_date     = row_map.get('expirationDate', ''),
+            credential_id       = row_map.get('certificationNumber', ''),
+            row_grouped         = row_grouped,
+            split_confidence    = split_conf,
+            raw_text_backup     = line.strip(),
+        ))
+
+    return groups
 
 
-def _parse_sequential_cert_table(text: str) -> List[Dict[str, str]]:
-    """
-    Parse sequential cell-per-line certification tables (DOCX XML extractor format).
-
-    All table cells appear as individual lines in row-major order.  The parser:
-      1. Locates a consecutive block of lines that each match a known column header.
-      2. Uses the detected column count (N) to group subsequent lines into rows.
-      3. Builds a cert dict per row, skipping dash/empty name cells.
-    """
-    non_empty_lines = [l.strip() for l in text.split('\n') if l.strip()]
+def _extract_sequential_groups(text: str) -> List[CertGroup]:
+    """Extract CertGroups from sequential cell-per-line (DOCX XML extractor) format."""
+    non_empty = [l.strip() for l in text.split('\n') if l.strip()]
 
     header_start = -1
-    col_order: List[str] = []
-
-    for i, line in enumerate(non_empty_lines):
-        idx = _col_idx_for_header(line)
+    col_order:   List[str] = []
+    for i, line in enumerate(non_empty):
+        idx = _col_idx(line)
         if idx >= 0:
             if header_start < 0:
                 header_start = i
             col_order.append(_COL_FIELDS[idx])
         elif col_order:
-            break  # header block ended
+            break
 
-    # Must have at least the 'name' column (col 0) to proceed
     if not col_order or col_order[0] != 'name':
         return []
 
-    n_cols = len(col_order)
-    data_lines = non_empty_lines[header_start + n_cols:]
-    results: List[Dict[str, str]] = []
+    n_cols     = len(col_order)
+    data_lines = non_empty[header_start + n_cols:]
+    groups:    List[CertGroup] = []
 
-    for j in range(0, len(data_lines), n_cols):
-        row_cells = data_lines[j:j + n_cols]
-        if not row_cells:
+    for i in range(0, len(data_lines), n_cols):
+        row = data_lines[i:i + n_cols]
+        if not row:
             break
-        cert = _build_cert_dict(row_cells, col_order)
-        if cert:
-            results.append(cert)
+        row_map = {col_order[ci]: _clean_cert_field(row[ci]) for ci in range(min(n_cols, len(row)))}
 
+        name_raw = row_map.get('name', '')
+        if not name_raw:
+            continue
+
+        cert_names, split_conf = _split_cert_names_in_cell(name_raw)
+        row_grouped = len(cert_names) > 1
+        groups.append(CertGroup(
+            issuer              = row_map.get('issuedBy', ''),
+            certification_name  = cert_names[0] if not row_grouped else None,
+            certification_names = cert_names    if row_grouped     else None,
+            issue_date          = row_map.get('dateObtained', ''),
+            expiration_date     = row_map.get('expirationDate', ''),
+            credential_id       = row_map.get('certificationNumber', ''),
+            row_grouped         = row_grouped,
+            split_confidence    = split_conf,
+            raw_text_backup     = ' | '.join(row[:n_cols]),
+        ))
+
+    return groups
+
+
+def extract_cert_groups_python(text: str, fmt: CertFormat) -> List[CertGroup]:
+    """Deterministically extract cert groups from TABLE-format text only."""
+    if fmt == CertFormat.TABLE_SEQUENTIAL:
+        return _extract_sequential_groups(text)
+    if fmt in (CertFormat.TABLE_SINGLE_ROW, CertFormat.TABLE_MULTI_ROW):
+        return _extract_pipe_groups(text)
+    return []
+
+
+# ── Step 3: Normalize LLM output → CertGroups ────────────────────────────────
+
+def normalize_rich_llm_output(data: Dict[str, Any]) -> List[CertGroup]:
+    """Convert LLM JSON (flat or rich schema) into CertGroup objects."""
+    raw_certs = data.get('certifications', [])
+    if not isinstance(raw_certs, list):
+        return []
+
+    groups: List[CertGroup] = []
+    for item in raw_certs:
+        if not isinstance(item, dict):
+            continue
+
+        has_rich = 'row_grouped' in item or 'split_confidence' in item or 'certification_names' in item
+        if has_rich:
+            c_names = [_clean_cert_field(n) for n in (item.get('certification_names') or []) if _clean_cert_field(n)]
+            c_name  = _clean_cert_field(item.get('certification_name', '')) or None
+            groups.append(CertGroup(
+                issuer              = _clean_cert_field(item.get('issuer', '')),
+                certification_name  = c_name,
+                certification_names = c_names or None,
+                issue_date          = _clean_cert_field(item.get('issue_date', '')),
+                expiration_date     = _clean_cert_field(item.get('expiration_date', '')),
+                credential_id       = _clean_cert_field(item.get('credential_id', '')),
+                credential_url      = _clean_cert_field(item.get('credential_url', '')),
+                inherited_issuer    = bool(item.get('inherited_issuer', False)),
+                row_grouped         = bool(item.get('row_grouped', False)),
+                split_confidence    = int(item.get('split_confidence', 80)),
+                raw_text_backup     = _clean_cert_field(item.get('raw_text_backup', '')) or str(item),
+            ))
+        else:
+            # Flat schema (current LLM output format)
+            name = _clean_cert_field(item.get('name', '') or item.get('certification_name', ''))
+            if not name:
+                continue
+            groups.append(CertGroup(
+                issuer              = _clean_cert_field(item.get('issuedBy', '')),
+                certification_name  = name,
+                issue_date          = _clean_cert_field(item.get('dateObtained', '')),
+                expiration_date     = _clean_cert_field(item.get('expirationDate', '')),
+                credential_id       = _clean_cert_field(item.get('certificationNumber', '')),
+                credential_url      = _clean_cert_field(item.get('credentialUrl', '')),
+                raw_text_backup     = _clean_cert_field(item.get('rawTextBackup', '')),
+            ))
+
+    return groups
+
+
+# ── Step 4: Validate ──────────────────────────────────────────────────────────
+
+def validate_cert_groups(groups: List[CertGroup]) -> List[CertGroup]:
+    """Drop invalid groups, enforce split rules, deduplicate."""
+    seen:  set             = set()
+    valid: List[CertGroup] = []
+
+    for g in groups:
+        if not g.raw_text_backup:
+            g.raw_text_backup = g.certification_name or ', '.join(g.certification_names or []) or 'unknown'
+
+        if g.split_confidence < SPLIT_THRESHOLD and g.certification_names:
+            g.row_grouped = True
+
+        has_name = bool(
+            (g.certification_name and g.certification_name.strip())
+            or any(n and n.strip() for n in (g.certification_names or []))
+        )
+        if not has_name:
+            logger.warning("[cert-validate] Dropping group with no name: %s", g.raw_text_backup[:80])
+            continue
+
+        names_for_key = [g.certification_name] if g.certification_name else (g.certification_names or [])
+        key = '|'.join(sorted(n.lower().strip() for n in names_for_key if n))
+        if key in seen:
+            logger.info("[cert-validate] Deduplicating: %s", key[:60])
+            continue
+        seen.add(key)
+        valid.append(g)
+
+    return valid
+
+
+# ── Step 5: Normalize to flat frontend dicts ──────────────────────────────────
+
+def _flat_cert(group: CertGroup, name: str) -> Dict[str, Any]:
+    return {
+        'name':                name.strip(),
+        'issuedBy':            group.issuer,
+        'dateObtained':        group.issue_date,
+        'expirationDate':      group.expiration_date,
+        'certificationNumber': group.credential_id,
+        'credentialUrl':       group.credential_url,
+        'rawTextBackup':       group.raw_text_backup,
+    }
+
+
+def normalize_cert_groups(groups: List[CertGroup]) -> List[Dict[str, Any]]:
+    """Expand CertGroups into flat cert dicts ready for the frontend."""
+    results: List[Dict[str, Any]] = []
+    for group in groups:
+        if group.row_grouped and group.certification_names:
+            valid_names = [n.strip() for n in group.certification_names if n and n.strip()]
+            if not valid_names:
+                continue
+            if group.split_confidence >= SPLIT_THRESHOLD:
+                for name in valid_names:
+                    results.append(_flat_cert(group, name))
+                logger.info("[cert-norm] Expanded %d grouped certs (split_conf=%d)", len(valid_names), group.split_confidence)
+            else:
+                joined = ', '.join(valid_names)
+                results.append(_flat_cert(group, joined))
+                logger.info("[cert-norm] Kept %d names joined (split_conf=%d < %d)", len(valid_names), group.split_confidence, SPLIT_THRESHOLD)
+        elif group.certification_name:
+            results.append(_flat_cert(group, group.certification_name))
     return results
 
 
-def parse_cert_table_from_text(text: str) -> List[Dict[str, str]]:
+# ── Pipeline entry point ──────────────────────────────────────────────────────
+
+def run_cert_extraction_pipeline(
+    text: str,
+    llm_raw_data: Optional[Dict[str, Any]] = None,
+) -> Tuple[List[Dict[str, Any]], str, int]:
     """
-    Detect and parse certification tables from raw resume text.
+    Full certification extraction pipeline.
 
-    Tries pipe-separated format first (python-docx fallback), then sequential
-    cell-per-line format (DOCX XML primary extractor).  Returns [] when no
-    table structure is found so the LLM result is used as-is.
+    1. Classify format
+    2. Python table extraction (TABLE formats → zero hallucination)
+    3. Normalize + merge LLM output
+    4. Validate
+    5. Normalize to flat dicts
 
-    Each returned dict has exactly the keys defined in _COL_FIELDS:
-        name, issuedBy, dateObtained, certificationNumber, expirationDate
+    Returns: (flat_certs, format_type_str, confidence)
     """
-    if not text:
-        return []
+    fmt, fmt_confidence = classify_cert_section(text)
+    logger.info("[cert-pipeline] Format: %s (confidence=%d)", fmt.value, fmt_confidence)
 
-    lines = text.split('\n')
+    groups: List[CertGroup] = []
 
-    pipe_results = _parse_pipe_cert_table(lines)
-    if pipe_results:
-        logger.info(
-            "[cert-table] %d cert(s) parsed from pipe-separated table",
-            len(pipe_results),
-        )
-        return pipe_results
+    # Table formats: deterministic Python extraction first
+    if fmt in (CertFormat.TABLE_SINGLE_ROW, CertFormat.TABLE_MULTI_ROW, CertFormat.TABLE_SEQUENTIAL):
+        groups = extract_cert_groups_python(text, fmt)
+        if groups:
+            logger.info("[cert-pipeline] Python table extractor: %d group(s)", len(groups))
 
-    seq_results = _parse_sequential_cert_table(text)
-    if seq_results:
-        logger.info(
-            "[cert-table] %d cert(s) parsed from sequential cell-per-line table",
-            len(seq_results),
-        )
-        return seq_results
+    # Merge LLM output (adds any certs the table extractor missed)
+    if llm_raw_data:
+        llm_groups = normalize_rich_llm_output(llm_raw_data)
+        if llm_groups:
+            logger.info("[cert-pipeline] LLM produced %d group(s)", len(llm_groups))
+        if groups:
+            py_keys = set()
+            for g in groups:
+                names = [g.certification_name] if g.certification_name else (g.certification_names or [])
+                py_keys.update(n.lower().strip() for n in names if n)
+            for lg in llm_groups:
+                lg_names = [lg.certification_name] if lg.certification_name else (lg.certification_names or [])
+                if not any(n.lower().strip() in py_keys for n in lg_names if n):
+                    groups.append(lg)
+        else:
+            groups = llm_groups
 
-    return []
+    if fmt_confidence < 70:
+        for g in groups:
+            if not g.raw_text_backup or g.raw_text_backup == 'unknown':
+                g.raw_text_backup = text[:500]
+
+    groups = validate_cert_groups(groups)
+    flat   = normalize_cert_groups(groups)
+    logger.info("[cert-pipeline] Final flat certs: %d", len(flat))
+    return flat, fmt.value, fmt_confidence
 
 
 def _clean_cert_field(value: Any) -> str:
@@ -918,48 +1112,6 @@ def extract_certification_fields(cert: Dict[str, Any]) -> Dict[str, Any]:
     return cert
 
 
-# ── Degree prefixes / abbreviations used to detect education entries ──────────
-_DEGREE_PREFIXES: tuple = (
-    "master of ", "bachelor of ", "doctor of ", "associate of ",
-    "master's ", "bachelor's ", "doctorate of ",
-)
-_DEGREE_ABBREV_RE = re.compile(
-    r'^\s*(m\.?s\.?|m\.?a\.?|b\.?s\.?|b\.?a\.?|mba|ph\.?d\.?|'
-    r'b\.?tech|m\.?tech|b\.?e\.?|m\.?e\.?|b\.?sc\.?|m\.?sc\.?)'
-    r'(\b|[\s,|/])',
-    re.IGNORECASE,
-)
-_GPA_RE = re.compile(r'\bgpa\b|\bcgpa\b|\b\d\.\d+\s*/\s*\d\.\d+\b', re.IGNORECASE)
-
-
-def _is_education_degree(cert: Dict[str, Any]) -> bool:
-    """
-    Return True if this cert dict looks like an education/degree entry that was
-    mistakenly extracted by the certifications agent.
-
-    Detects:
-    • Name starts with a full degree phrase  ("Master of Science …")
-    • Name starts with a degree abbreviation ("MS Data Analytics", "B.S. …")
-    • issuedBy contains a GPA/CGPA value    ("CGPA – 3.91/4.0")
-    """
-    name = (cert.get('name') or '').strip().lower()
-    issued_by = (cert.get('issuedBy') or '').strip()
-
-    # 1. Full degree phrase prefix
-    if any(name.startswith(prefix) for prefix in _DEGREE_PREFIXES):
-        return True
-
-    # 2. Degree abbreviation at the start
-    if _DEGREE_ABBREV_RE.match(name):
-        return True
-
-    # 3. issuedBy looks like a GPA value — dead giveaway it's education
-    if _GPA_RE.search(issued_by):
-        return True
-
-    return False
-
-
 def reorder_sections_to_standard(
     sections: Dict[str, Any]
 ) -> Dict[str, Any]:
@@ -999,6 +1151,52 @@ def reorder_sections_to_standard(
         )
 
     return reordered
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CERTIFICATION SECTION EXTRACTOR
+#
+# Slices out only the certification-relevant portion of a full resume text so
+# the LLM cert agent is never shown education or experience content.
+# Used as a fallback when the chunker finds no "certifications" section.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_CERT_HEADING_RE = re.compile(
+    r'^\s*(?:technical\s+)?certif(?:ication|icate)s?(?:\s+and\s+certificates?)?'
+    r'|^\s*licenses?\s*$'
+    r'|^\s*professional\s+certif(?:ication|icate)s?\s*$',
+    re.IGNORECASE | re.MULTILINE,
+)
+# Major section headings that mark the end of a certification block
+_MAJOR_HEADING_RE = re.compile(
+    r'^\s*(?:education|summary|professional\s+summary|experience|employment'
+    r'|work\s+history|job\s+history|technical\s+skills?|skills?\s*(?:summary)?'
+    r'|competencies|qualifications|projects?)\s*[:\-]?\s*$',
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _extract_cert_text(raw_text: str) -> str:
+    """
+    Return the portion of *raw_text* that belongs to a certification section.
+
+    Algorithm:
+      1. Find the first line that looks like a cert heading.
+      2. Scan forward until the next major section heading (or end of text).
+      3. Return that slice.  If no cert heading is found, return *raw_text*
+         unchanged so the LLM can still attempt extraction.
+    """
+    heading_m = _CERT_HEADING_RE.search(raw_text)
+    if not heading_m:
+        return raw_text  # no cert heading found — send full text as last resort
+
+    start = heading_m.start()
+    # Search for the next major heading AFTER our cert heading
+    end_m = _MAJOR_HEADING_RE.search(raw_text, heading_m.end())
+    end = end_m.start() if end_m else len(raw_text)
+
+    sliced = raw_text[start:end].strip()
+    return sliced if sliced else raw_text
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1166,37 +1364,42 @@ class ResumeAgent:
             ),
             AgentType.CERTIFICATIONS: (
                 "You are the Certification Extraction Agent.\n\n"
-                "TASK: Extract ONLY certifications, licenses, and professional credentials "
-                "that are EXPLICITLY present in the text. Think step-by-step.\n\n"
-                "CONSTRAINTS (strictly enforced):\n"
-                "• Do NOT infer, guess, or hallucinate certifications.\n"
-                "• Do NOT extract skills, degrees, awards, or job titles.\n"
-                "• Do NOT merge content from other resume sections.\n"
-                "• Do NOT invent issuing institutions — only extract if explicitly stated.\n"
-                "• If no certifications are present, return an empty array.\n\n"
+                "TASK: Extract ONLY professional certifications, licenses, and credentials "
+                "that are EXPLICITLY listed in a CERTIFICATION / LICENSES / CERTIFICATES "
+                "section of the resume text. Think step-by-step.\n\n"
+                "HARD CONSTRAINTS — never violate these:\n"
+                "• Do NOT extract academic degrees (Master of Science, Bachelor of, MBA, "
+                "  PhD, BS, MS, B.Tech, M.Tech, Associate of, etc.). Those belong in the "
+                "  EDUCATION section and must be completely ignored here.\n"
+                "• Do NOT extract skills, tool names, or technologies.\n"
+                "• Do NOT extract job titles, company names, or project names.\n"
+                "• Do NOT infer, guess, or hallucinate any certification not written "
+                "  explicitly in the certification section.\n"
+                "• Do NOT invent issuing organisations — leave issuedBy empty if not stated.\n"
+                "• If text contains no certifications at all, return { \"certifications\": [] }.\n\n"
                 "TABLE FORMAT: The text may contain TABLE COLUMN HEADERS such as:\n"
                 "  'Certification', 'Issued By', 'Date Obtained (MM/YY)',\n"
                 "  'Certification Number (If Applicable)', 'Expiration Date (If Applicable)'\n"
-                "  These are LAYOUT LABELS — SKIP them entirely.\n\n"
+                "  These are LAYOUT LABELS — SKIP them, extract only data rows.\n\n"
                 "DASH / EMPTY HANDLING:\n"
-                "• A '-' or '--' in any field means NOT PROVIDED. Use \"\" not \"-\".\n"
-                "• Blank or whitespace-only values must also be returned as \"\".\n\n"
+                "• A '-' or '--' means NOT PROVIDED. Use \"\" not \"-\".\n"
+                "• Blank or whitespace-only values must be returned as \"\".\n\n"
                 "COMMA-SEPARATED CERTS: If multiple certifications appear on one line "
                 "separated by commas (e.g. 'Cert A, Cert B'), split into separate objects.\n\n"
                 "FIELD RULES:\n"
-                "• 'name'  — certification title ONLY. No issuer, no dates, no ID numbers.\n"
-                "• 'issuedBy' — issuing organisation only if explicitly stated; else \"\".\n"
-                "• 'dateObtained' — use MMM YYYY format; \"\" if not stated.\n"
+                "• 'name' — credential/certification title ONLY.\n"
+                "• 'issuedBy' — issuing body if explicitly stated; else \"\".\n"
+                "• 'dateObtained' — MMM YYYY format; \"\" if not stated.\n"
                 "• 'certificationNumber' — ID/number if explicitly given; else \"\".\n"
-                "• 'expirationDate' — use MMM YYYY format; \"\" if not stated.\n\n"
-                "DUPLICATE HANDLING: If the same certification appears more than once "
-                "(e.g. in both a table row and a list), include it only once.\n\n"
-                "INTERNAL REASONING (before producing JSON, think through):\n"
-                "1. Which certifications are explicitly present?\n"
-                "2. Are they real or hallucinated?\n"
-                "3. Are they tied to an institution?\n"
-                "4. Are there duplicates or formatting artifacts?\n"
-                "5. Does the final JSON match the required schema?"
+                "• 'expirationDate' — MMM YYYY format; \"\" if not stated.\n\n"
+                "DUPLICATE HANDLING: If the same cert appears more than once, include it once.\n\n"
+                "BEFORE producing JSON, reason through:\n"
+                "1. Is this item a certification/license or an academic degree?\n"
+                "2. Is it explicitly written (not inferred)?\n"
+                "3. Does the issuer field contain a GPA, CGPA, or university name? "
+                "   If yes, this is a degree — skip it.\n"
+                "4. Are there duplicates?\n"
+                "5. Does the output match the required schema exactly?"
             ),
         }
 
@@ -1327,13 +1530,16 @@ Return ONLY this JSON object (no other text):
 }
 
 CRITICAL RULES:
-• Return ONLY certifications explicitly present – never hallucinate.
-• Do NOT output skills, degrees, awards, or job titles.
+• Return ONLY professional certifications/licenses explicitly present – never hallucinate.
+• NEVER include academic degrees (Master of Science, Bachelor of, MBA, PhD, MS, BS,
+  B.Tech, M.Tech, Associate of, etc.) — those are education, NOT certifications.
+• If issuedBy looks like a GPA or CGPA (e.g. "CGPA 3.9/4.0", "3.91/4.0") the entry
+  is a degree — skip it entirely.
+• Do NOT output skills, tool names, job titles, or company names.
 • Skip table column header lines: Certification, Issued By, Date Obtained, etc.
 • A dash (-) or blank means the field is empty – always use "" not "-".
 • Comma-separated certs on one line must be split into separate objects.
 • Deduplicate: if the same cert appears twice, include it once only.
-• Each certification is a separate object in the array.
 • ONLY the credential title goes in "name" – no other data.
 • credentialUrl: only populate if a URL (http/https) is explicitly present.
 • If no certifications exist in the text, return { "certifications": [] }.""",
@@ -1468,19 +1674,24 @@ CRITICAL RULES:
             log_cache_analysis(response, self.agent_type.value)
 
             # ── Parse response ────────────────────────────────────────────────
-            # extract_content() parses the normalised OpenAI response dict
             raw_text       = OpenAIClient.extract_content(response)
             extracted_data = self._extract_json_from_text(raw_text)
-            cleaned_data   = self._clean_extracted_data(extracted_data, source_text=input_text)
 
-            # ── Certification table augmentation ──────────────────────────────
-            # Run the deterministic Python table parser alongside the LLM.
-            # Table-sourced certs have zero hallucination risk; they are merged
-            # into (and take priority over) the LLM results for any matching row.
+            # ── Certifications: run full pipeline before cleaning ─────────────
+            # Pipeline: classify format → Python table extraction → merge LLM →
+            # validate → normalize flat.  Table-sourced rows have zero
+            # hallucination risk; they take priority over LLM results.
             if self.agent_type == AgentType.CERTIFICATIONS:
-                table_certs = parse_cert_table_from_text(input_text)
-                if table_certs:
-                    cleaned_data = self._merge_table_certs(cleaned_data, table_certs)
+                flat_certs, fmt_type, fmt_conf = run_cert_extraction_pipeline(
+                    input_text, extracted_data
+                )
+                extracted_data['certifications'] = flat_certs
+                logger.info(
+                    "[cert-pipeline] Format=%s conf=%d → %d cert(s)",
+                    fmt_type, fmt_conf, len(flat_certs),
+                )
+
+            cleaned_data = self._clean_extracted_data(extracted_data, source_text=input_text)
 
             logger.info(
                 f"✅ {self.agent_type.value.title()} Agent: Extraction successful "
@@ -1719,14 +1930,6 @@ CRITICAL RULES:
                     logger.warning("[certifications] Dropping cert with empty name: %s", cert)
                     continue
 
-                # ── Drop education/degree entries misclassified as certs ──────
-                if _is_education_degree(cert):
-                    logger.warning(
-                        "[certifications] Dropping education entry mistaken for cert: '%s'",
-                        name,
-                    )
-                    continue
-
                 # ── Normalise dates ───────────────────────────────────────────
                 if cert.get('dateObtained'):
                     cert['dateObtained'] = normalize_work_period(cert['dateObtained'])
@@ -1763,55 +1966,6 @@ CRITICAL RULES:
                 logger.warning("[validation] Certification schema validation: %s", val_err)
 
         return data
-
-    def _merge_table_certs(
-        self,
-        llm_data: Dict[str, Any],
-        table_certs: List[Dict[str, str]],
-    ) -> Dict[str, Any]:
-        existing: List[Dict[str, Any]] = llm_data.get('certifications', [])
-        if not isinstance(existing, list):
-            existing = []
-
-        # Build a lookup by normalised name for O(1) access
-        name_to_cert: Dict[str, Dict[str, Any]] = {}
-        for cert in existing:
-            if isinstance(cert, dict) and cert.get('name'):
-                name_to_cert[cert['name'].lower().strip()] = cert
-
-        added = 0
-        enriched = 0
-
-        for tc in table_certs:
-            # Run the same field-cleaning pipeline used for LLM certs
-            tc_clean = extract_certification_fields(dict(tc))
-            name = tc_clean.get('name', '').strip()
-            if not name:
-                continue
-
-            norm = name.lower()
-
-            if norm not in name_to_cert:
-                # New cert — append
-                existing.append(tc_clean)
-                name_to_cert[norm] = tc_clean
-                added += 1
-            else:
-                # Already present from LLM — enrich empty fields with table values
-                existing_cert = name_to_cert[norm]
-                for field in ('issuedBy', 'dateObtained', 'certificationNumber', 'expirationDate'):
-                    if not existing_cert.get(field) and tc_clean.get(field):
-                        existing_cert[field] = tc_clean[field]
-                        enriched += 1
-
-        if added or enriched:
-            logger.info(
-                "[cert-table] Merge complete — %d new cert(s) added, %d field(s) enriched",
-                added, enriched,
-            )
-
-        llm_data['certifications'] = existing
-        return llm_data
 
     def _create_error_result(
         self,
@@ -1941,13 +2095,34 @@ class MultiAgentResumeProcessor:
             at = agent.agent_type
             key = section_mapping[at]
 
-            # Certifications always get the full resume for best recall
+            # Certifications: prefer the chunked section; only fall back to a
+            # targeted slice of the full text when the chunker found nothing.
             if at == AgentType.CERTIFICATIONS:
-                agent_inputs[at] = raw_text
-                strategy[at.value] = 'full_resume_always'
-                logger.info(
-                    f"🔍 {at.value.title()} Agent: Using full resume (certification rule)"
-                )
+                cert_chunk = sections.get('certifications', '')
+                if isinstance(cert_chunk, str):
+                    cert_chunk = cert_chunk.strip()
+                if cert_chunk:
+                    agent_inputs[at] = cert_chunk
+                    strategy[at.value] = 'chunked_section'
+                    logger.info(
+                        f"✅ Certifications Agent: Using chunked section "
+                        f"({len(cert_chunk)} chars)"
+                    )
+                else:
+                    # Chunker found no cert section — extract only the cert
+                    # portion from the full resume to limit LLM exposure.
+                    extracted = _extract_cert_text(raw_text)
+                    agent_inputs[at] = extracted
+                    strategy[at.value] = (
+                        'cert_section_extracted'
+                        if extracted != raw_text
+                        else 'full_resume_fallback'
+                    )
+                    logger.info(
+                        f"⚠️ Certifications Agent: No cert chunk found — "
+                        f"using {'extracted cert section' if extracted != raw_text else 'full resume'} "
+                        f"({len(extracted)} chars)"
+                    )
                 continue
 
             if key in sections and sections.get(key) and sections[key].strip():

@@ -457,7 +457,7 @@ class ResumeAgentSchemas:
         """
         return {
             "name": "extract_certifications",
-            "description": "Extract certifications, licenses, and professional credentials",
+            "description": "Extract certifications, Certified, licenses, and professional credentials",
             "parameters": {
                 "type": "object",
                 "properties": {
