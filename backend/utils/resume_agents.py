@@ -618,6 +618,99 @@ def _deduplicate_employment_history(
     return deduped
 
 
+def _merge_same_role_entries(
+    jobs: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    Merge job entries that share the same (companyName, roleName) — i.e. the
+    LLM incorrectly created one entry per project instead of grouping them.
+
+    Rules:
+    • Entries with the SAME (company + role) key are merged into one.
+      - Projects lists are concatenated in original order.
+      - Responsibilities lists are concatenated.
+      - workPeriod: keep the broadest range (earliest start, latest end).
+    • Entries with DIFFERENT roles at the same company are kept separate
+      (those represent genuine role changes).
+    • Order in the output preserves first-occurrence order.
+    """
+    # Ordered dict to preserve insertion order while grouping by key
+    from collections import OrderedDict
+
+    _TILL_DATE_RE = re.compile(r'till\s*date|present|current', re.IGNORECASE)
+
+    def _sort_key_period(period: str) -> str:
+        """Return a sortable string from a workPeriod (YYYY-MM)."""
+        m = re.search(r'(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{4})',
+                      period or '', re.IGNORECASE)
+        if not m:
+            return ''
+        months = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec']
+        return f"{m.group(2)}-{months.index(m.group(1).lower()):02d}"
+
+    def _merge_periods(a: str, b: str) -> str:
+        """Return the broader of two workPeriod strings."""
+        if not a:
+            return b
+        if not b:
+            return a
+        # Extract start months
+        a_parts = re.split(r'\s*[-–]\s*', a, maxsplit=1)
+        b_parts = re.split(r'\s*[-–]\s*', b, maxsplit=1)
+        start = a_parts[0] if _sort_key_period(a_parts[0]) <= _sort_key_period(b_parts[0]) else b_parts[0]
+        a_end = a_parts[1] if len(a_parts) > 1 else ''
+        b_end = b_parts[1] if len(b_parts) > 1 else ''
+        # 'Till Date' / 'Present' always wins as the end
+        if _TILL_DATE_RE.search(a_end) or _TILL_DATE_RE.search(b_end):
+            end = a_end if _TILL_DATE_RE.search(a_end) else b_end
+        else:
+            end = a_end if _sort_key_period(a_end) >= _sort_key_period(b_end) else b_end
+        return f"{start.strip()} - {end.strip()}" if end.strip() else start.strip()
+
+    groups: 'OrderedDict[tuple, Dict[str, Any]]' = OrderedDict()
+
+    for job in jobs:
+        if not isinstance(job, dict):
+            continue
+        company  = _normalize_for_dedup(job.get('companyName', ''))
+        role     = _normalize_for_dedup(job.get('roleName', ''))
+        key      = (company, role)
+
+        if key not in groups:
+            groups[key] = dict(job)
+            # ensure mutable lists
+            groups[key]['projects']       = list(job.get('projects') or [])
+            groups[key]['responsibilities'] = list(job.get('responsibilities') or [])
+        else:
+            existing = groups[key]
+            # Merge projects
+            new_projects = job.get('projects') or []
+            existing['projects'].extend(new_projects)
+            # Merge responsibilities
+            new_resps = job.get('responsibilities') or []
+            existing['responsibilities'].extend(new_resps)
+            # Broaden work period
+            existing['workPeriod'] = _merge_periods(
+                existing.get('workPeriod', ''), job.get('workPeriod', '')
+            )
+            merged_count = len(new_projects) + len(new_resps)
+            if merged_count:
+                logger.info(
+                    "[role-merge] Merged %d project(s)/%d resp(s) from duplicate "
+                    "role entry '%s' @ '%s' into existing entry.",
+                    len(new_projects), len(new_resps),
+                    job.get('roleName', ''), job.get('companyName', ''),
+                )
+
+    result = list(groups.values())
+    if len(result) < len(jobs):
+        logger.info(
+            "[role-merge] Collapsed %d entries into %d by merging same-role duplicates.",
+            len(jobs), len(result),
+        )
+    return result
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # CERTIFICATION EXTRACTION PIPELINE
 #
@@ -1345,7 +1438,25 @@ class ResumeAgent:
                 "  from responsibility bullet text where they appear after 'using', 'via', 'i.e'. "
                 "  Replace or omit the vendor name, keeping the sentence meaningful.\n"
                 "• This rule applies ONLY to responsibility/bullet text. Vendor names in a\n"
-                "  Technologies/Tools label MUST be preserved in keyTechnologies."
+                "  Technologies/Tools label MUST be preserved in keyTechnologies.\n\n"
+                "ROLE-PROJECT GROUPING RULES (CRITICAL — prevents duplicate roles):\n"
+                "• If multiple projects exist under the SAME role at the SAME company, "
+                "  group them under ONE job entry. Do NOT create a separate job entry per project.\n"
+                "• roleName is set ONCE per (company + role) combination — it is a job-level "
+                "  field, not a project-level field.\n"
+                "• If the candidate held DIFFERENT roles at the same company at different times, "
+                "  create SEPARATE job entries, each with its own distinct roleName.\n"
+                "• NEVER repeat the same roleName across multiple job entries for the same company.\n"
+                "• NEVER invent or infer a role name. Only use what is explicitly written in the "
+                "  resume. If no role is stated, leave roleName as empty string ''.\n\n"
+                "EXAMPLE — CORRECT (same role, 3 projects → 1 job entry):\n"
+                "  { companyName: 'Acme', roleName: 'Data Engineer', workPeriod: '2021-2026',\n"
+                "    projects: [{projectName:'Fraud Detection',...}, "
+                "{projectName:'Risk Analytics',...}] }\n\n"
+                "EXAMPLE — FORBIDDEN (same role split into 3 entries):\n"
+                "  { companyName:'Acme', roleName:'Data Engineer', projects:[{Fraud Detection}] }\n"
+                "  { companyName:'Acme', roleName:'Data Engineer', projects:[{Risk Analytics}] }\n"
+                "  ← THIS IS WRONG. Merge all projects under one entry."
             ),
             AgentType.EDUCATION: (
                 "Extract ONLY education, academic background, and degrees. "
@@ -1892,6 +2003,11 @@ CRITICAL RULES:
 
             # ── Deduplication ─────────────────────────────────────────────────
             data['employmentHistory'] = _deduplicate_employment_history(
+                data['employmentHistory']
+            )
+
+            # ── Merge same-role entries (LLM split one role into N entries) ───
+            data['employmentHistory'] = _merge_same_role_entries(
                 data['employmentHistory']
             )
 

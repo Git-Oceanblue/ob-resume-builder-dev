@@ -129,7 +129,8 @@ class ResumeAgentSchemas:
                                         "Format MUST be: 'MMM YYYY - MMM YYYY'  OR  'MMM YYYY - Till Date'\n"
                                         "Use regular hyphen (-) with single space on each side.\n"
                                         "CORRECT examples: 'Jun 2024 - Sep 2025', 'Mar 2023 - Till Date'\n"
-                                        "FORBIDDEN: 'January 2024', 'February 2025', 'Sept 2024', 'Mar 24'"
+                                        "FORBIDDEN: 'January 2024', 'February 2025', 'Sept 2024', 'Mar 24'\n"
+                                        "FORBIDDEN: "
                                     )
                                 },
 
