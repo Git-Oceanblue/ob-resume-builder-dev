@@ -35,9 +35,13 @@ def calculate_cost(input_tokens: int, output_tokens: int, model: str) -> float:
             'input':  0.005,
             'output': 0.015,
         },
+        'gpt-4.1-mini': {
+            'input':  0.0004,
+            'output': 0.0016,
+        },
     }
 
-    model_pricing = pricing.get(model, pricing['gpt-4o-mini'])
+    model_pricing = pricing.get(model, pricing['gpt-4.1-mini'])
     input_cost  = (input_tokens  / 1000) * model_pricing['input']
     output_cost = (output_tokens / 1000) * model_pricing['output']
     return input_cost + output_cost

@@ -2093,6 +2093,7 @@ CRITICAL RULES:
             except Exception as val_err:
                 logger.warning("[validation] Certification schema validation: %s", val_err)
 
+
         return data
 
     def _create_error_result(
