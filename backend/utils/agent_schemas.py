@@ -129,8 +129,7 @@ class ResumeAgentSchemas:
                                         "Format MUST be: 'MMM YYYY - MMM YYYY'  OR  'MMM YYYY - Till Date'\n"
                                         "Use regular hyphen (-) with single space on each side.\n"
                                         "CORRECT examples: 'Jun 2024 - Sep 2025', 'Mar 2023 - Till Date'\n"
-                                        "FORBIDDEN: 'January 2024', 'February 2025', 'Sept 2024', 'Mar 24'\n"
-                                        "FORBIDDEN: "
+                                        "FORBIDDEN: 'January 2024', 'February 2025', 'Sept 2024', 'Mar"
                                     )
                                 },
 
@@ -409,28 +408,84 @@ class ResumeAgentSchemas:
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "technicalSkills": {
-                        "type": "object",
-                        "description": "Technical skills grouped by categories exactly as shown in resume"
-                    },
                     "skillCategories": {
                         "type": "array",
                         "description": (
-                            "MANDATORY: Extract ALL skill categories exactly as written.\n\n"
-                            "COMMON FORMAT: 'Category Name: Skill1, Skill2, Skill3'\n"
-                            "  - The text BEFORE the colon is the categoryName\n"
-                            "  - The comma-separated items AFTER the colon are the skills list\n"
-                            "  EXAMPLE: 'SalesForce CRM: Apex, VisualForce, LWC' →\n"
-                            "    categoryName='SalesForce CRM', skills=['Apex', 'VisualForce', 'LWC']\n\n"
-                            "EXTRACT EVERY CATEGORY – missing even one category is unacceptable.\n"
-                            "PRESERVE original category names exactly (do not abbreviate or rename).\n"
-                            "Split comma-separated skill lists into individual array items."
+                            "MANDATORY: Extract ALL technical skills grouped into logical named categories.\n\n"
+
+                            "=== WHAT IS A 'CATEGORY'? ===\n"
+                            "A category is a BROAD GROUPING such as:\n"
+                            "  'Programming Languages', 'Databases', 'Cloud Platforms', 'AI/ML Frameworks'\n"
+                            "An INDIVIDUAL TOOL or SKILL (e.g., 'Python', 'AWS', 'TensorFlow', 'Pyrit') "
+                            "is NOT a category — it belongs INSIDE the skills array of its category.\n\n"
+
+                            "=== CASE 1: Resume has explicit inline categories (most common) ===\n"
+                            "Format: 'Category Label: Skill1, Skill2, Skill3'\n"
+                            "  - Text BEFORE the colon → categoryName\n"
+                            "  - Comma-separated text AFTER the colon → skills array\n"
+                            "EXAMPLE:\n"
+                            "  'SalesForce CRM: Apex, VisualForce, LWC' →\n"
+                            "    { categoryName: 'SalesForce CRM', skills: ['Apex', 'VisualForce', 'LWC'] }\n\n"
+
+                            "=== CASE 2: Category followed by sub-bullets (NOT inline) ===\n"
+                            "Format:\n"
+                            "  Vector Databases:\n"
+                            "    - Pyrit\n"
+                            "    - Garak\n"
+                            "    - ChromaDB\n"
+                            "The category name is 'Vector Databases', and the bullets are its SKILLS.\n"
+                            "CORRECT output:\n"
+                            "  { categoryName: 'Vector Databases', skills: ['Pyrit', 'Garak', 'ChromaDB'] }\n"
+                            "WRONG output (DO NOT DO THIS):\n"
+                            "  { categoryName: 'Vector Databases', skills: [] }\n"
+                            "  { categoryName: 'Pyrit', skills: [] }\n"
+                            "  { categoryName: 'Garak', skills: [] }\n\n"
+
+                            "=== CASE 3: Flat list of skills with no grouping labels ===\n"
+                            "If the resume lists individual tools/skills without any category labels,\n"
+                            "you MUST intelligently group them into logical categories.\n"
+                            "DO NOT create one categoryName entry per individual skill.\n\n"
+                            "WRONG (one skill per entry — causes broken formatting):\n"
+                            "  [{ categoryName: 'Python', skills: [] },\n"
+                            "   { categoryName: 'TensorFlow', skills: [] },\n"
+                            "   { categoryName: 'AWS', skills: [] }]\n\n"
+                            "CORRECT (logically grouped):\n"
+                            "  [{ categoryName: 'Programming Languages', skills: ['Python'] },\n"
+                            "   { categoryName: 'AI/ML Frameworks', skills: ['TensorFlow'] },\n"
+                            "   { categoryName: 'Cloud Platforms', skills: ['AWS'] }]\n\n"
+
+                            "=== GOLDEN RULES ===\n"
+                            "1. Every entry MUST have a non-empty skills array — NEVER leave skills: []\n"
+                            "   If a label has sub-bullets, those bullets ARE the skills array.\n"
+                            "   If a label has no sub-items and is a broad grouping, infer skills from context.\n"
+                            "   If a label IS itself an individual skill/tool, merge it into a parent category.\n"
+                            "2. EXTRACT EVERY SKILL — missing even one skill is a data-loss error.\n"
+                            "3. PRESERVE original category names exactly when explicitly given.\n"
+                            "4. Split comma-separated skill lists into individual array items.\n"
+                            "5. Minimum category count = number of distinct top-level groupings in the resume.\n"
+                            "   Typical: 3–15 categories. If you are producing 20+ entries, you are likely "
+                            "treating individual skills as categories — STOP and regroup."
                         ),
                         "items": {
                             "type": "object",
                             "properties": {
-                                "categoryName": {"type": "string"},
-                                "skills": {"type": "array", "items": {"type": "string"}},
+                                "categoryName": {
+                                    "type": "string",
+                                    "description": (
+                                        "A BROAD grouping label (e.g., 'Programming Languages', "
+                                        "'Databases', 'Cloud Platforms'). "
+                                        "NEVER an individual tool or technology name."
+                                    )
+                                },
+                                "skills": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                    "description": (
+                                        "MANDATORY non-empty list of individual skills/tools in this category. "
+                                        "Each element is a single skill name. "
+                                        "This array must NEVER be empty."
+                                    )
+                                },
                                 "subCategories": {
                                     "type": "array",
                                     "items": {
@@ -439,13 +494,18 @@ class ResumeAgentSchemas:
                                             "name": {"type": "string"},
                                             "skills": {"type": "array", "items": {"type": "string"}}
                                         }
-                                    }
+                                    },
+                                    "description": (
+                                        "Only populate when the resume explicitly has a two-level hierarchy "
+                                        "(a category with named sub-groups). Leave empty otherwise."
+                                    )
                                 }
-                            }
+                            },
+                            "required": ["categoryName", "skills"]
                         }
                     }
                 },
-                "required": []
+                "required": ["skillCategories"]
             }
         }
 
