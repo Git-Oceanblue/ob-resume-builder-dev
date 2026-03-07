@@ -783,10 +783,17 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
         font: 'Times New Roman',
       });
 
-      // Shared section header paragraph: justified, PATTERN B (after=200, line=276)
+      // Section header — Education, Certifications, Employment History: default spacing (after=200, line=276)
       const sectionHdr = (text) => new Paragraph({
         alignment: AlignmentType.JUSTIFIED,
         spacing: { after: 200, line: 276, lineRule: 'auto' },
+        children: [sectionHdrRun(text)],
+      });
+
+      // Section header — Professional Summary, Technical Skills: tight spacing (after=0, line=240)
+      const tightSectionHdr = (text) => new Paragraph({
+        alignment: AlignmentType.JUSTIFIED,
+        spacing: { after: 0, line: 240, lineRule: 'auto' },
         children: [sectionHdrRun(text)],
       });
 
@@ -906,8 +913,8 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
               ...createEmploymentHistory(resumeData),
 
               // ── Professional Summary ────────────────────────────────────
-              new Paragraph({ spacing: { after: 200, line: 276, lineRule: 'auto' }, children: [] }),
-              sectionHdr('Professional Summary'),
+              new Paragraph({ spacing: { after: 0, line: 240, lineRule: 'auto' }, children: [] }),
+              tightSectionHdr('Professional Summary'),
 
               // Bullet points (always bulleted — consistent with template)
               ...(resumeData.professionalSummary || []).map(point =>
@@ -941,8 +948,8 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
               ]),
 
               // ── Technical Skills ────────────────────────────────────────
-              new Paragraph({ spacing: { after: 200, line: 276, lineRule: 'auto' }, children: [] }),
-              sectionHdr('Technical Skills'),
+              new Paragraph({ spacing: { after: 0, line: 240, lineRule: 'auto' }, children: [] }),
+              tightSectionHdr('Technical Skills'),
               ...createTechnicalSkills(resumeData),
             ],
           },
