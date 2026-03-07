@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { FiDownload, FiPrinter } from 'react-icons/fi';
-import { Document, Packer, Paragraph, Table, TableCell, TableRow, TextRun, BorderStyle, AlignmentType, WidthType, ShadingType, VerticalAlign, LevelFormat } from 'docx';
+import { Document, Packer, Paragraph, Table, TableCell, TableRow, TextRun, BorderStyle, AlignmentType, WidthType, ShadingType, VerticalAlign, LevelFormat, TabStopType, Break } from 'docx';
 import { saveAs } from 'file-saver';
 
 // PricingDisplay component to show token usage and cost
@@ -295,7 +295,7 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
       verticalAlign: VerticalAlign.CENTER,
       children: [new Paragraph({
         alignment: AlignmentType.CENTER,
-        spacing: { before: 0, after: 0, line: 240 },
+        spacing: { before: 0, after: 0, line: 240, lineRule: 'auto' },
         children: boldRuns,
       })],
     });
@@ -305,7 +305,7 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
       verticalAlign: VerticalAlign.CENTER,
       children: [new Paragraph({
         alignment: AlignmentType.CENTER,
-        spacing: { before: 0, after: 0, line: 240 },
+        spacing: { before: 0, after: 0, line: 240, lineRule: 'auto' },
         children: [new TextRun({ text: text || '-', font: 'Calibri', size: 22 })],
       })],
     });
@@ -314,10 +314,11 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
       // Header row
       new TableRow({
         tableHeader: true,
+        alignment: AlignmentType.CENTER,
         children: [
           eduHdrCell(1653, [
-            new TextRun({ text: 'Degree', bold: true, font: 'Arial', size: 20 }),
-            new TextRun({ text: ' (AA/AS, BA/BS, BS/BTech/BE, MS/MTech/MBA/MA, PhD/Doctoral)', font: 'Arial', size: 20 }),
+            new TextRun({ text: 'Degree ', bold: true, font: 'Arial', size: 20, break: 1 }),
+            new TextRun({ text: '(AA/AS, BA/BS, BS/BTech/BE, MS/MTech/MBA/MA, PhD/Doctoral)', font: 'Arial', size: 20 }),
           ]),
           eduHdrCell(1901, [
             new TextRun({ text: 'Area of Study', bold: true, font: 'Arial', size: 20 }),
@@ -349,6 +350,7 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
           new TableRow({
             height: { value: 58, rule: 'atLeast' },
             cantSplit: true,
+            alignment: AlignmentType.CENTER,
             children: [
               eduDataCell(edu.degree),
               eduDataCell(edu.areaOfStudy),
@@ -365,6 +367,7 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
         new TableRow({
           height: { value: 58, rule: 'atLeast' },
           cantSplit: true,
+          alignment: AlignmentType.CENTER,
           children: ['-', '-', '-', '-', '-', '-'].map(() => eduDataCell('-')),
         })
       );
@@ -372,15 +375,16 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
 
     return new Table({
       alignment: AlignmentType.CENTER,
+      columnWidths: [1653, 1901, 2684, 1712, 1524, 1316],
       rows,
       width: { size: 0, type: WidthType.AUTO },
       borders: {
-        top:              { style: BorderStyle.SINGLE, size: 4, color: 'auto' },
-        bottom:           { style: BorderStyle.SINGLE, size: 4, color: 'auto' },
-        left:             { style: BorderStyle.SINGLE, size: 4, color: 'auto' },
-        right:            { style: BorderStyle.SINGLE, size: 4, color: 'auto' },
-        insideHorizontal: { style: BorderStyle.SINGLE, size: 4, color: 'auto' },
-        insideVertical:   { style: BorderStyle.SINGLE, size: 4, color: 'auto' },
+        top:              { style: BorderStyle.SINGLE, size: 4, space: 0, color: 'auto' },
+        bottom:           { style: BorderStyle.SINGLE, size: 4, space: 0, color: 'auto' },
+        left:             { style: BorderStyle.SINGLE, size: 4, space: 0, color: 'auto' },
+        right:            { style: BorderStyle.SINGLE, size: 4, space: 0, color: 'auto' },
+        insideHorizontal: { style: BorderStyle.SINGLE, size: 4, space: 0, color: 'auto' },
+        insideVertical:   { style: BorderStyle.SINGLE, size: 4, space: 0, color: 'auto' },
       },
     });
   };
@@ -394,7 +398,7 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
       verticalAlign: VerticalAlign.CENTER,
       children: [new Paragraph({
         alignment: AlignmentType.CENTER,
-        spacing: { before: 0, after: 0, line: 240 },
+        spacing: { before: 0, after: 0, line: 240, lineRule: 'auto' },
         children: boldRuns,
       })],
     });
@@ -404,7 +408,7 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
       verticalAlign: VerticalAlign.CENTER,
       children: [new Paragraph({
         alignment: AlignmentType.CENTER,
-        spacing: { before: 0, after: 0, line: 240 },
+        spacing: { before: 0, after: 0, line: 240, lineRule: 'auto' },
         children: [new TextRun({ text: text || '-', font: 'Calibri', size: 22 })],
       })],
     });
@@ -413,6 +417,7 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
       // Header row
       new TableRow({
         tableHeader: true,
+        alignment: AlignmentType.CENTER,
         children: [
           certHdrCell(3417, [
             new TextRun({ text: 'Certification', bold: true, font: 'Arial', size: 20 }),
@@ -443,6 +448,7 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
           new TableRow({
             height: { value: 58, rule: 'atLeast' },
             cantSplit: true,
+            alignment: AlignmentType.CENTER,
             children: [
               certDataCell(cert.name),
               certDataCell(cert.issuedBy),
@@ -458,6 +464,7 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
         new TableRow({
           height: { value: 58, rule: 'atLeast' },
           cantSplit: true,
+          alignment: AlignmentType.CENTER,
           children: ['-', '-', '-', '-', '-'].map(() => certDataCell('-')),
         })
       );
@@ -465,15 +472,16 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
 
     return new Table({
       alignment: AlignmentType.CENTER,
+      columnWidths: [3417, 2424, 1834, 1644, 1471],
       rows,
       width: { size: 0, type: WidthType.AUTO },
       borders: {
-        top:              { style: BorderStyle.SINGLE, size: 4, color: 'auto' },
-        bottom:           { style: BorderStyle.SINGLE, size: 4, color: 'auto' },
-        left:             { style: BorderStyle.SINGLE, size: 4, color: 'auto' },
-        right:            { style: BorderStyle.SINGLE, size: 4, color: 'auto' },
-        insideHorizontal: { style: BorderStyle.SINGLE, size: 4, color: 'auto' },
-        insideVertical:   { style: BorderStyle.SINGLE, size: 4, color: 'auto' },
+        top:              { style: BorderStyle.SINGLE, size: 4, space: 0, color: 'auto' },
+        bottom:           { style: BorderStyle.SINGLE, size: 4, space: 0, color: 'auto' },
+        left:             { style: BorderStyle.SINGLE, size: 4, space: 0, color: 'auto' },
+        right:            { style: BorderStyle.SINGLE, size: 4, space: 0, color: 'auto' },
+        insideHorizontal: { style: BorderStyle.SINGLE, size: 4, space: 0, color: 'auto' },
+        insideVertical:   { style: BorderStyle.SINGLE, size: 4, space: 0, color: 'auto' },
       },
     });
   };
@@ -493,7 +501,7 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
     });
 
     // Shared paragraph spacing for body lines
-    const bodySpacing = { after: 0, line: 240 };
+    const bodySpacing = { after: 0, line: 240, lineRule: 'auto' };
 
     // Bullet paragraph factory (references numbering defined in Document)
     const bulletPara = (text) => new Paragraph({
@@ -505,21 +513,18 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
       ],
     });
 
-    // Borderless full-width table helper for two-column same-line layout
-    const noBorderTable = (leftPara, rightPara) => new Table({
-      width: { size: 100, type: WidthType.PERCENTAGE },
-      borders: {
-        top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.NONE },
-        left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE },
-        insideHorizontal: { style: BorderStyle.NONE }, insideVertical: { style: BorderStyle.NONE },
-      },
-      rows: [
-        new TableRow({
-          children: [
-            new TableCell({ width: { size: 70, type: WidthType.PERCENTAGE }, children: [leftPara] }),
-            new TableCell({ width: { size: 30, type: WidthType.PERCENTAGE }, children: [rightPara] }),
-          ],
-        }),
+    // Right-aligned tab stop at content-area right edge (letter width 12240 minus 720+720 margins)
+    const RIGHT_TAB = { type: TabStopType.RIGHT, position: 10800 };
+
+    // Single-paragraph helper: left text + right-tab + right text, both bold TNR 14pt #1F497D
+    const hdrTabPara = (leftText, rightText) => new Paragraph({
+      tabStops: [RIGHT_TAB],
+      alignment: AlignmentType.JUSTIFIED,
+      spacing: bodySpacing,
+      children: [
+        new TextRun({ text: leftText, bold: true, boldComplexScript: true, size: 28, color: '1F497D', font: 'Times New Roman' }),
+        new TextRun({ text: '\t' }),
+        new TextRun({ text: rightText, bold: true, boldComplexScript: true, size: 28, color: '1F497D', font: 'Times New Roman' }),
       ],
     });
 
@@ -530,47 +535,27 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
         const formattedJobLocation = formatEmploymentLocation(job.location || '');
         const departmentOrSubRole = (job.department || job.subRole || '').trim();
 
-        // Spacer between entries
+        // Spacer between entries — PATTERN B: after=200, line=276 (visible gap)
         if (index > 0) {
-          paragraphs.push(new Paragraph({ spacing: bodySpacing, children: [] }));
+          paragraphs.push(new Paragraph({ spacing: { after: 200, line: 276, lineRule: 'auto' }, children: [] }));
         }
 
-        // Company name (left) + date range (right) — same line
-        paragraphs.push(
-          noBorderTable(
-            new Paragraph({
-              spacing: bodySpacing,
-              children: [hdrRun(job.companyName || 'Company')],
-            }),
-            new Paragraph({
-              alignment: AlignmentType.RIGHT,
-              spacing: bodySpacing,
-              children: [hdrRun(job.workPeriod || '')],
-            }),
-          )
-        );
+        // Company name (left) + date range (right) — single paragraph with right tab
+        paragraphs.push(hdrTabPara(job.companyName || 'Company', job.workPeriod || ''));
 
         // Job title (left) + location (right, if present)
         if (formattedJobLocation) {
-          paragraphs.push(
-            noBorderTable(
-              new Paragraph({ spacing: bodySpacing, children: [hdrRun(job.roleName || 'Role')] }),
-              new Paragraph({
-                alignment: AlignmentType.RIGHT,
-                spacing: bodySpacing,
-                children: [hdrRun(formattedJobLocation)],
-              }),
-            )
-          );
+          paragraphs.push(hdrTabPara(job.roleName || 'Role', formattedJobLocation));
         } else {
           paragraphs.push(
-            new Paragraph({ spacing: bodySpacing, children: [hdrRun(job.roleName || 'Role')] })
+            new Paragraph({ alignment: AlignmentType.JUSTIFIED, spacing: bodySpacing, children: [hdrRun(job.roleName || 'Role')] })
           );
         }
 
         if (departmentOrSubRole) {
           paragraphs.push(
             new Paragraph({
+              alignment: AlignmentType.JUSTIFIED,
               spacing: bodySpacing,
               children: [new TextRun({ text: departmentOrSubRole, font: 'Calibri' })],
             })
@@ -586,6 +571,7 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
 
             paragraphs.push(
               new Paragraph({
+                alignment: AlignmentType.JUSTIFIED,
                 spacing: bodySpacing,
                 children: [new TextRun({ text: projectTitle, bold: true, font: 'Calibri' })],
               })
@@ -595,6 +581,7 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
             if (project.projectResponsibilities && project.projectResponsibilities.length > 0) {
               paragraphs.push(
                 new Paragraph({
+                  alignment: AlignmentType.JUSTIFIED,
                   spacing: bodySpacing,
                   children: [new TextRun({ text: 'Responsibilities', bold: true, font: 'Calibri' })],
                 })
@@ -606,6 +593,8 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
 
             // Project key technologies
             if (project.keyTechnologies) {
+              // Empty para (after=0) separates bullets from Key Technologies line
+              paragraphs.push(new Paragraph({ spacing: bodySpacing, children: [] }));
               paragraphs.push(
                 new Paragraph({
                   alignment: AlignmentType.JUSTIFIED,
@@ -625,6 +614,7 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
         if (job.responsibilities && job.responsibilities.length > 0 && job.responsibilities.some(r => r.trim())) {
           paragraphs.push(
             new Paragraph({
+              alignment: AlignmentType.JUSTIFIED,
               spacing: bodySpacing,
               children: [new TextRun({ text: 'Responsibilities', bold: true, font: 'Calibri' })],
             })
@@ -640,6 +630,7 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
             if (subsection.title) {
               paragraphs.push(
                 new Paragraph({
+                  alignment: AlignmentType.JUSTIFIED,
                   spacing: bodySpacing,
                   children: [new TextRun({ text: subsection.title + ':', bold: true, font: 'Calibri' })],
                 })
@@ -655,6 +646,8 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
 
         // Job-level key technologies
         if (job.keyTechnologies) {
+          // Empty para (after=0) separates bullets from Key Technologies line
+          paragraphs.push(new Paragraph({ spacing: bodySpacing, children: [] }));
           paragraphs.push(
             new Paragraph({
               alignment: AlignmentType.JUSTIFIED,
@@ -683,7 +676,7 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
   // Helper function to create technical skills content
   const createTechnicalSkills = (resumeData) => {
     const paragraphs = [];
-    const skillSpacing = { after: 0, line: 240 };
+    const skillSpacing = { after: 0, line: 240, lineRule: 'auto' };
 
     // Legacy format skills
     if (resumeData.technicalSkills && Object.keys(resumeData.technicalSkills).length > 0) {
@@ -790,15 +783,15 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
         font: 'Times New Roman',
       });
 
-      // Shared section header paragraph: justified, after=200, line=276
+      // Shared section header paragraph: justified, PATTERN B (after=200, line=276)
       const sectionHdr = (text) => new Paragraph({
         alignment: AlignmentType.JUSTIFIED,
-        spacing: { after: 200, line: 276 },
+        spacing: { after: 200, line: 276, lineRule: 'auto' },
         children: [sectionHdrRun(text)],
       });
 
       // Shared spacing for the title-section rows
-      const titleSpacing = { after: 0, line: 240 };
+      const titleSpacing = { after: 0, line: 240, lineRule: 'auto' };
 
       // Create a new Word document
       const doc = new Document({
@@ -811,8 +804,20 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
               },
             },
           },
+          paragraphStyles: [
+            {
+              id: 'ListParagraph',
+              name: 'List Paragraph',
+              basedOn: 'Normal',
+              quickFormat: true,
+              paragraph: {
+                indent: { left: 360, hanging: 360 },
+                contextualSpacing: true,
+              },
+            },
+          ],
         },
-        // Bullet list numbering definition (Symbol font, bullet at left margin, text at 0.25")
+        // Bullet list numbering definition (Symbol font \uF0B7, bullet at 720 left, hanging 360)
         numbering: {
           config: [
             {
@@ -821,11 +826,11 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
                 {
                   level: 0,
                   format: LevelFormat.BULLET,
-                  text: '\u2022',
+                  text: '\uF0B7',
                   alignment: AlignmentType.LEFT,
                   style: {
                     paragraph: { indent: { left: 360, hanging: 360 } },
-                    run: { font: 'Arial' },
+                    run: { font: 'Symbol' },
                   },
                 },
               ],
@@ -844,7 +849,7 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
               // ── Candidate Name ──────────────────────────────────────────
               new Paragraph({
                 alignment: AlignmentType.CENTER,
-                spacing: { after: 0, line: 240 },
+                spacing: { after: 0, line: 240, lineRule: 'auto' },
                 children: [
                   new TextRun({
                     text: resumeData.name || 'Full Name',
@@ -858,85 +863,50 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
 
               // ── Title/Role label | VectorVMS label (line 2) ─────────────
               // ── Title/Role value | VectorVMS value (line 3) ─────────────
-              // Implemented as a borderless 2-column table (label row + value row)
-              new Table({
-                width: { size: 100, type: WidthType.PERCENTAGE },
-                borders: {
-                  top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.NONE },
-                  left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE },
-                  insideHorizontal: { style: BorderStyle.NONE }, insideVertical: { style: BorderStyle.NONE },
-                },
-                rows: [
-                  // Row 1: labels (Times New Roman, 14pt, #1F497D, bold, justified)
-                  new TableRow({
-                    children: [
-                      new TableCell({
-                        width: { size: 50, type: WidthType.PERCENTAGE },
-                        children: [
-                          new Paragraph({
-                            alignment: AlignmentType.JUSTIFIED,
-                            spacing: titleSpacing,
-                            children: [
-                              new TextRun({ text: 'Title/Role:', bold: true, size: 28, color: '1F497D', font: 'Times New Roman' }),
-                            ],
-                          }),
-                        ],
-                      }),
-                      new TableCell({
-                        width: { size: 50, type: WidthType.PERCENTAGE },
-                        children: [
-                          new Paragraph({
-                            alignment: AlignmentType.RIGHT,
-                            spacing: titleSpacing,
-                            children: [
-                              new TextRun({ text: 'VectorVMS Requisition Number:', bold: true, size: 28, color: '1F497D', font: 'Times New Roman' }),
-                            ],
-                          }),
-                        ],
-                      }),
-                    ],
-                  }),
-                  // Row 2: values (Calibri default size, default color, normal weight)
-                  new TableRow({
-                    children: [
-                      new TableCell({
-                        width: { size: 50, type: WidthType.PERCENTAGE },
-                        children: [
-                          new Paragraph({
-                            alignment: AlignmentType.JUSTIFIED,
-                            spacing: titleSpacing,
-                            children: [new TextRun({ text: resumeData.title || '' })],
-                          }),
-                        ],
-                      }),
-                      new TableCell({
-                        width: { size: 50, type: WidthType.PERCENTAGE },
-                        children: [
-                          new Paragraph({
-                            alignment: AlignmentType.RIGHT,
-                            spacing: titleSpacing,
-                            children: [new TextRun({ text: resumeData.requisitionNumber || '' })],
-                          }),
-                        ],
-                      }),
-                    ],
-                  }),
+              // Single paragraphs with right-aligned tab stop
+              new Paragraph({
+                tabStops: [{ type: TabStopType.RIGHT, position: 10800 }],
+                spacing: titleSpacing,
+                children: [
+                  new TextRun({ text: 'Title/Role:', bold: true, size: 28, color: '1F497D', font: 'Times New Roman' }),
+                  new TextRun({ text: '\t' }),
+                  new TextRun({ text: 'VectorVMS Requisition Number:', bold: true, size: 28, color: '1F497D', font: 'Times New Roman' }),
                 ],
               }),
+              new Paragraph({
+                tabStops: [{ type: TabStopType.RIGHT, position: 10800 }],
+                alignment: AlignmentType.JUSTIFIED,
+                spacing: titleSpacing,
+                children: [
+                  new TextRun({ text: resumeData.title || '' }),
+                  new TextRun({ text: '\t' }),
+                  new TextRun({ text: resumeData.requisitionNumber || '' }),
+                ],
+              }),
+
+              // ── Spacer: tight single blank line before Education section ──
+              new Paragraph({ spacing: { after: 0, line: 240, lineRule: 'auto' }, children: [] }),
 
               // ── Education ───────────────────────────────────────────────
               sectionHdr('Education:'),
               createEducationTable(resumeData),
 
+              // ── Spacer (PATTERN B) before Certifications section ────────
+              new Paragraph({ spacing: { after: 200, line: 276, lineRule: 'auto' }, children: [] }),
+
               // ── Certifications ──────────────────────────────────────────
               sectionHdr('Certifications and Certificates:'),
               createCertificationsTable(resumeData),
+
+              // ── Spacer (PATTERN B) before Employment History section ─────
+              new Paragraph({ spacing: { after: 200, line: 276, lineRule: 'auto' }, children: [] }),
 
               // ── Employment History ──────────────────────────────────────
               sectionHdr('Employment History:'),
               ...createEmploymentHistory(resumeData),
 
               // ── Professional Summary ────────────────────────────────────
+              new Paragraph({ spacing: { after: 200, line: 276, lineRule: 'auto' }, children: [] }),
               sectionHdr('Professional Summary'),
 
               // Bullet points (always bulleted — consistent with template)
@@ -944,7 +914,7 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
                 new Paragraph({
                   numbering: { reference: 'resumeBullet', level: 0 },
                   alignment: AlignmentType.JUSTIFIED,
-                  spacing: { after: 0, line: 240 },
+                  spacing: { after: 0, line: 240, lineRule: 'auto' },
                   children: [
                     new TextRun({ text: stripBullet(point), font: 'Calibri', boldComplexScript: true }),
                   ],
@@ -954,14 +924,15 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
               // Summary subsections — no bullets, plain paragraphs
               ...(resumeData.summarySections || resumeData.subsections || []).flatMap(subsection => [
                 ...(subsection.title ? [new Paragraph({
-                  spacing: { after: 0, line: 240 },
+                  alignment: AlignmentType.JUSTIFIED,
+                  spacing: { after: 0, line: 240, lineRule: 'auto' },
                   children: [new TextRun({ text: subsection.title, bold: true, font: 'Calibri' })],
                 })] : []),
                 ...(subsection.content && subsection.content.length > 0
                   ? subsection.content.map(item =>
                       new Paragraph({
                         alignment: AlignmentType.JUSTIFIED,
-                        spacing: { after: 0, line: 240 },
+                        spacing: { after: 0, line: 240, lineRule: 'auto' },
                         children: [new TextRun({ text: item, font: 'Calibri' })],
                       })
                     )
@@ -970,6 +941,7 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
               ]),
 
               // ── Technical Skills ────────────────────────────────────────
+              new Paragraph({ spacing: { after: 200, line: 276, lineRule: 'auto' }, children: [] }),
               sectionHdr('Technical Skills'),
               ...createTechnicalSkills(resumeData),
             ],

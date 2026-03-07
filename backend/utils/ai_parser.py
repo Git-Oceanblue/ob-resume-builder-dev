@@ -21,7 +21,7 @@ if not _api_key:
     logger.warning("⚠️  OPENAI_API_KEY env var not set — API calls will fail.")
 
 client = OpenAIClient(
-    model_id=os.getenv('OPENAI_MODEL_ID', 'gpt-4.1'),
+    model_id=os.getenv('OPENAI_MODEL_ID', 'gpt-4o-mini'),
     api_key=_api_key,
 )
 
