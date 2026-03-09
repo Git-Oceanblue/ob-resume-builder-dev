@@ -83,6 +83,31 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
   const stripBullet = (text = '') =>
     text.replace(/^[\u2022\u25CF\u25E6\u2023\u2043\u2219\u00B7\u25CB\u25AA\u25B8\-\u2013\u2014*]\s*/, '').trim();
 
+  // BUG 2 FIX: Normalize partial/variant month abbreviations to standard 3-letter form.
+  // Handles cases like "sept 2026" → "Sep 2026", "octo 2028" → "Oct 2028".
+  // Applied to all date strings before rendering (both HTML preview and DOCX).
+  const normalizeMonthAbbr = (dateStr = '') => {
+    if (!dateStr || typeof dateStr !== 'string') return dateStr;
+    const map = {
+      january: 'Jan', february: 'Feb', march: 'Mar', april: 'Apr',
+      june: 'Jun', july: 'Jul', august: 'Aug',
+      september: 'Sep', october: 'Oct', november: 'Nov', december: 'Dec',
+      sept: 'Sep', octo: 'Oct',
+    };
+    return dateStr.replace(
+      /\b(january|february|march|april|june|july|august|september|october|november|december|sept|octo)\b/gi,
+      m => map[m.toLowerCase()] || m
+    );
+  };
+
+  // BUG 5 FIX: Split a summary/bullet string on inline "•" separators and
+  // return an array of individual items. Used in both preview and DOCX.
+  const splitBulletItems = (text = '') => {
+    if (!text || typeof text !== 'string') return [text];
+    if (!text.includes('\u2022') && !text.includes(' • ')) return [text];
+    return text.split(/\s*[•\u2022]\s*/).map(s => s.trim()).filter(Boolean);
+  };
+
   // ─────────────────────────────────────────────────────────────
   // LOCATION LOOKUP TABLES  (module-level equivalent inside component)
   //   Indian state/UT names — to detect India when "India" word is absent
@@ -504,12 +529,14 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
     const bodySpacing = { after: 0, line: 240, lineRule: 'auto' };
 
     // Bullet paragraph factory (references numbering defined in Document)
+    // BUG 4 FIX: Added explicit size: 22 (11pt) and bold: true so bullet
+    // responsibility text renders as bold Calibri 11pt in the DOCX.
     const bulletPara = (text) => new Paragraph({
       numbering: { reference: 'resumeBullet', level: 0 },
       alignment: AlignmentType.JUSTIFIED,
       spacing: bodySpacing,
       children: [
-        new TextRun({ text: stripBullet(text), font: 'Calibri', boldComplexScript: true }),
+        new TextRun({ text: stripBullet(text), font: 'Calibri', size: 22, boldComplexScript: true }),
       ],
     });
 
@@ -532,8 +559,13 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
       const sortedEmploymentHistory = [...resumeData.employmentHistory];
 
       sortedEmploymentHistory.forEach((job, index) => {
+        // BUG 1 FIX: Wrap each job in try-catch so one malformed entry
+        // does not silently abort rendering of all subsequent entries.
+        try {
         const formattedJobLocation = formatEmploymentLocation(job.location || '');
         const departmentOrSubRole = (job.department || job.subRole || '').trim();
+        // BUG 2 FIX: normalize month abbreviations in the work period
+        const normalizedWorkPeriod = normalizeMonthAbbr(job.workPeriod || '');
 
         // Spacer between entries — PATTERN B: after=200, line=276 (visible gap)
         if (index > 0) {
@@ -541,7 +573,7 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
         }
 
         // Company name (left) + date range (right) — single paragraph with right tab
-        paragraphs.push(hdrTabPara(job.companyName || 'Company', job.workPeriod || ''));
+        paragraphs.push(hdrTabPara(job.companyName || 'Company', normalizedWorkPeriod));
 
         // Job title (left) + location (right, if present)
         if (formattedJobLocation) {
@@ -557,7 +589,7 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
             new Paragraph({
               alignment: AlignmentType.JUSTIFIED,
               spacing: bodySpacing,
-              children: [new TextRun({ text: departmentOrSubRole, font: 'Calibri' })],
+              children: [new TextRun({ text: departmentOrSubRole, font: 'Calibri', size: 22 })],
             })
           );
         }
@@ -573,7 +605,7 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
               new Paragraph({
                 alignment: AlignmentType.JUSTIFIED,
                 spacing: bodySpacing,
-                children: [new TextRun({ text: projectTitle, bold: true, font: 'Calibri' })],
+                children: [new TextRun({ text: projectTitle, bold: true, font: 'Calibri', size: 22 })],
               })
             );
 
@@ -583,7 +615,7 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
                 new Paragraph({
                   alignment: AlignmentType.JUSTIFIED,
                   spacing: bodySpacing,
-                  children: [new TextRun({ text: 'Responsibilities', bold: true, font: 'Calibri' })],
+                  children: [new TextRun({ text: 'Responsibilities', bold: true, font: 'Calibri', size: 22 })],
                 })
               );
               project.projectResponsibilities.forEach(responsibility => {
@@ -600,9 +632,9 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
                   alignment: AlignmentType.JUSTIFIED,
                   spacing: bodySpacing,
                   children: [
-                    new TextRun({ text: 'Key Technologies/Skills', bold: true, boldComplexScript: true, font: 'Calibri' }),
-                    new TextRun({ text: ': ', font: 'Calibri' }),
-                    new TextRun({ text: project.keyTechnologies, boldComplexScript: true, font: 'Calibri' }),
+                    new TextRun({ text: 'Key Technologies/Skills', bold: true, boldComplexScript: true, font: 'Calibri', size: 22 }),
+                    new TextRun({ text: ': ', font: 'Calibri', size: 22 }),
+                    new TextRun({ text: project.keyTechnologies, boldComplexScript: true, font: 'Calibri', size: 22 }),
                   ],
                 })
               );
@@ -616,7 +648,7 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
             new Paragraph({
               alignment: AlignmentType.JUSTIFIED,
               spacing: bodySpacing,
-              children: [new TextRun({ text: 'Responsibilities', bold: true, font: 'Calibri' })],
+              children: [new TextRun({ text: 'Responsibilities', bold: true, font: 'Calibri', size: 22 })],
             })
           );
           job.responsibilities.forEach(resp => {
@@ -632,7 +664,7 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
                 new Paragraph({
                   alignment: AlignmentType.JUSTIFIED,
                   spacing: bodySpacing,
-                  children: [new TextRun({ text: subsection.title + ':', bold: true, font: 'Calibri' })],
+                  children: [new TextRun({ text: subsection.title + ':', bold: true, font: 'Calibri', size: 22 })],
                 })
               );
               if (subsection.content && subsection.content.length > 0) {
@@ -653,19 +685,27 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
               alignment: AlignmentType.JUSTIFIED,
               spacing: bodySpacing,
               children: [
-                new TextRun({ text: 'Key Technologies/Skills', bold: true, boldComplexScript: true, font: 'Calibri' }),
-                new TextRun({ text: ': ', font: 'Calibri' }),
-                new TextRun({ text: job.keyTechnologies, boldComplexScript: true, font: 'Calibri' }),
+                new TextRun({ text: 'Key Technologies/Skills', bold: true, boldComplexScript: true, font: 'Calibri', size: 22 }),
+                new TextRun({ text: ': ', font: 'Calibri', size: 22 }),
+                new TextRun({ text: job.keyTechnologies, boldComplexScript: true, font: 'Calibri', size: 22 }),
               ],
             })
           );
+        }
+        // BUG 1 FIX: catch block — log error and continue to next job entry
+        } catch (jobError) {
+          console.warn('[DOCX] Employment entry', index, 'skipped due to error:', jobError);
+          paragraphs.push(new Paragraph({
+            spacing: bodySpacing,
+            children: [new TextRun({ text: `[${job.companyName || 'Employment entry'} could not be rendered]`, font: 'Calibri', size: 22 })],
+          }));
         }
       });
     } else {
       paragraphs.push(
         new Paragraph({
           spacing: bodySpacing,
-          children: [new TextRun({ text: 'No employment history', font: 'Calibri' })],
+          children: [new TextRun({ text: 'No employment history', font: 'Calibri', size: 22 })],
         })
       );
     }
@@ -808,6 +848,7 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
             document: {
               run: {
                 font: { ascii: 'Calibri', hAnsi: 'Calibri', eastAsia: 'Calibri', cs: 'Times New Roman' },
+                size: 22, // Makes the whole body size to calibri 11
               },
             },
           },
@@ -916,16 +957,20 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
               new Paragraph({ spacing: { after: 0, line: 240, lineRule: 'auto' }, children: [] }),
               tightSectionHdr('Professional Summary'),
 
-              // Bullet points (always bulleted — consistent with template)
-              ...(resumeData.professionalSummary || []).map(point =>
-                new Paragraph({
-                  numbering: { reference: 'resumeBullet', level: 0 },
-                  alignment: AlignmentType.JUSTIFIED,
-                  spacing: { after: 0, line: 240, lineRule: 'auto' },
-                  children: [
-                    new TextRun({ text: stripBullet(point), font: 'Calibri', boldComplexScript: true }),
-                  ],
-                })
+              // BUG 5 FIX: Bullet points — split any item containing inline "•"
+              // separators before rendering so each sub-item gets its own bullet.
+              // BUG 4 FIX: Added explicit size: 22 (11pt) to match body font spec.
+              ...(resumeData.professionalSummary || []).flatMap(point =>
+                splitBulletItems(point).map(item =>
+                  new Paragraph({
+                    numbering: { reference: 'resumeBullet', level: 0 },
+                    alignment: AlignmentType.JUSTIFIED,
+                    spacing: { after: 0, line: 240, lineRule: 'auto' },
+                    children: [
+                      new TextRun({ text: stripBullet(item), font: 'Calibri', size: 22, boldComplexScript: true }),
+                    ],
+                  })
+                )
               ),
 
               // Summary subsections — no bullets, plain paragraphs
@@ -933,14 +978,14 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
                 ...(subsection.title ? [new Paragraph({
                   alignment: AlignmentType.JUSTIFIED,
                   spacing: { after: 0, line: 240, lineRule: 'auto' },
-                  children: [new TextRun({ text: subsection.title, bold: true, font: 'Calibri' })],
+                  children: [new TextRun({ text: subsection.title, bold: true, font: 'Calibri', size: 22 })],
                 })] : []),
                 ...(subsection.content && subsection.content.length > 0
                   ? subsection.content.map(item =>
                       new Paragraph({
                         alignment: AlignmentType.JUSTIFIED,
                         spacing: { after: 0, line: 240, lineRule: 'auto' },
-                        children: [new TextRun({ text: item, font: 'Calibri' })],
+                        children: [new TextRun({ text: item, font: 'Calibri', size: 22 })],
                       })
                     )
                   : []
@@ -1101,13 +1146,15 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
             {resumeData.employmentHistory.map((job, index) => {
               const formattedJobLocation = formatEmploymentLocation(job.location || '');
               const departmentOrSubRole = (job.department || job.subRole || '').trim();
+              // BUG 2 FIX: normalize month abbreviations before displaying
+              const displayWorkPeriod = normalizeMonthAbbr(job.workPeriod || '');
 
               return (
                 <div key={index} className="mb-6">
                   {/* LINE 1: Company Name (left)  |  Employment Period (right) */}
                   <div className="flex justify-between items-baseline">
                     <h3 className="font-bold text-lg text-blue-900">{job.companyName || 'Company Name'}</h3>
-                    <span className="text-gray-700 font-semibold text-sm whitespace-nowrap ml-4">{job.workPeriod || ''}</span>
+                    <span className="text-gray-700 font-semibold text-sm whitespace-nowrap ml-4">{displayWorkPeriod}</span>
                   </div>
                   {/* LINE 2: Job Title (left)  |  Location (right, only if available) */}
                   <div className="flex justify-between items-baseline">
@@ -1213,18 +1260,23 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
             {/* Main summary points — bullet points when multiple */}
             {resumeData.professionalSummary && resumeData.professionalSummary.length > 0 && (
               <div className="mb-4">
-                {resumeData.professionalSummary.length > 1 ? (
-                  <ul className="space-y-1 pl-1">
-                    {resumeData.professionalSummary.map((point, index) => (
-                      <li key={index} className="flex items-start text-gray-800 text-justify">
-                        <span className="mr-2 mt-0.5 text-ocean-dark flex-shrink-0">•</span>
-                        <span>{point}</span>
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p className="text-gray-800 text-justify">{resumeData.professionalSummary[0]}</p>
-                )}
+                {/* BUG 5 FIX: Each summary item is split by "•" so inline-separated
+                    items render as individual bullets instead of a single long line. */}
+                {(() => {
+                  const allItems = resumeData.professionalSummary.flatMap(point => splitBulletItems(point));
+                  return allItems.length > 1 ? (
+                    <ul className="space-y-1 pl-1">
+                      {allItems.map((item, index) => (
+                        <li key={index} className="flex items-start text-gray-800 text-justify">
+                          <span className="mr-2 mt-0.5 text-ocean-dark flex-shrink-0">•</span>
+                          <span>{item}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-gray-800 text-justify">{allItems[0]}</p>
+                  );
+                })()}
               </div>
             )}
 

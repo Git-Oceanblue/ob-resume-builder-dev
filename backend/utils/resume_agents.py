@@ -143,6 +143,25 @@ def normalize_work_period(work_period: str) -> str:
             flags=re.IGNORECASE
         )
 
+    # BUG 2 FIX: Also normalize partial/variant abbreviations that the LLM or
+    # original resume may use (e.g. "sept" → "Sep", "octo" → "Oct", "jan." → "Jan").
+    partial_month_mapping = [
+        (r'\bsept\b',     'Sep'),
+        (r'\bocto\b',     'Oct'),
+        (r'\bjan\.',      'Jan'),
+        (r'\bfeb\.',      'Feb'),
+        (r'\bmar\.',      'Mar'),
+        (r'\bapr\.',      'Apr'),
+        (r'\bjun\.',      'Jun'),
+        (r'\bjul\.',      'Jul'),
+        (r'\baug\.',      'Aug'),
+        (r'\bsep\.',      'Sep'),
+        (r'\bnov\.',      'Nov'),
+        (r'\bdec\.',      'Dec'),
+    ]
+    for pattern, abbrev in partial_month_mapping:
+        normalized = re.sub(pattern, abbrev, normalized, flags=re.IGNORECASE)
+
     # FIX #6b: Handle bare year (education date like "2006")
     bare_year = re.match(r'^\s*(\d{4})\s*$', normalized)
     if bare_year:
@@ -513,19 +532,58 @@ def enforce_project_period_dedup(job: Dict[str, Any]) -> Dict[str, Any]:
     return job
 
 
+def _has_explicit_project_label(name: str, text: str) -> bool:
+    """
+    BUG 3 FIX: Return True if *name* follows an explicit 'Project:', 'Project Name:',
+    or 'Project N:' label in the source text.
+    Only explicitly labeled projects are valid project entries.
+    """
+    pattern = re.compile(
+        r'(?:^|\n)\s*project\s*(?:name\s*)?(?:\d+\s*)?[:\-]\s*' + re.escape(name),
+        re.IGNORECASE | re.MULTILINE,
+    )
+    return bool(pattern.search(text))
+
+
+def _only_in_parentheses(name: str, text: str) -> bool:
+    """
+    BUG 3 FIX: Return True when every occurrence of *name* in *text* is
+    enclosed in parentheses (depth > 0).  Used to reject system/product
+    acronyms mentioned inside responsibility bullets
+    (e.g. "(including CRISE, SETS, and ICMS)") that the LLM incorrectly
+    extracts as project names.
+    Returns False (i.e. "not only in parens") when name is not found at all
+    so we don't silently block names the heuristic cannot evaluate.
+    """
+    if not name or not text:
+        return False
+    pattern = re.compile(r'\b' + re.escape(name) + r'\b', re.IGNORECASE)
+    matches = list(pattern.finditer(text))
+    if not matches:
+        return False  # name not found — cannot confirm it's in parens
+    for m in matches:
+        before = text[:m.start()]
+        depth = before.count('(') - before.count(')')
+        if depth <= 0:
+            return False  # at least one occurrence is outside parentheses
+    return True  # every occurrence is inside parentheses
+
+
 def validate_project_not_fabricated(
     project_name: str,
     job_text: str
 ) -> bool:
     """
-    FIX #10: Detect projects that were invented by the LLM from general
+    FIX #10 + BUG 3 FIX: Detect projects invented by the LLM from general
     responsibilities rather than extracted from explicitly named projects.
 
     Returns True if the project appears to be explicitly mentioned,
     False if it looks fabricated.
 
-    Format-agnostic: handles "Project N: Title", "Project: Title",
-    "Project Name: Title", bare project titles, etc.
+    BUG 3 addition:
+      • Rejects project names found ONLY inside parentheses (system names
+        mentioned in responsibilities, not real project headings).
+      • Rejects short ALL-CAPS acronyms that have no explicit 'Project:' label.
     """
     if not project_name:
         return True   # Empty name — let caller decide; don't block
@@ -540,6 +598,28 @@ def validate_project_not_fabricated(
     # Strip optional "/ Role" suffix
     clean = re.sub(r'\s*/\s*.+$', '', clean).strip()
     clean_lower = clean.lower()
+
+    # ── BUG 3 CHECK 1: name appears ONLY inside parentheses ─────────────────
+    # e.g. "(including CRISE, SETS, and ICMS)" — these are system names, not
+    # project headings.
+    if _only_in_parentheses(clean, job_text):
+        logger.warning(
+            "[BUG3] Project '%s' found only inside parentheses — "
+            "treating as system/product mention, not a named project.",
+            project_name,
+        )
+        return False
+
+    # ── BUG 3 CHECK 2: short ALL-CAPS acronym without explicit Project: label ─
+    # e.g. "CRISE", "SETS", "ICMS" — reject unless clearly labeled.
+    if re.match(r'^[A-Z0-9]{2,8}$', clean.strip()) and \
+            not _has_explicit_project_label(clean, job_text):
+        logger.warning(
+            "[BUG3] All-caps acronym '%s' has no explicit 'Project:' label — "
+            "likely a system acronym mentioned in responsibilities, not a project.",
+            project_name,
+        )
+        return False
 
     # Split into meaningful terms (> 3 chars)
     terms = [t for t in re.split(r'\W+', clean_lower) if len(t) > 3]
@@ -1860,10 +1940,20 @@ CRITICAL RULES:
 
         # ── SUMMARY ──────────────────────────────────────────────────────────
         if self.agent_type == AgentType.SUMMARY and data.get('professionalSummary'):
+            # BUG 5 FIX: Split items that contain inline "•" separators
+            # e.g. "Requirement Dev • Use Case Analysis • Project Mgmt"
+            # must become three separate bullet entries.
+            expanded: List[str] = []
+            for item in data['professionalSummary']:
+                if not isinstance(item, str):
+                    continue
+                if '\u2022' in item or ' • ' in item:
+                    parts = re.split(r'\s*[•\u2022]\s*', item)
+                    expanded.extend(p.strip() for p in parts if p.strip())
+                else:
+                    expanded.append(item)
             data['professionalSummary'] = [
-                strip_bullet_prefix(item)
-                for item in data['professionalSummary']
-                if isinstance(item, str)
+                strip_bullet_prefix(item) for item in expanded
             ]
             if data.get('summarySections'):
                 for section in data['summarySections']:

@@ -148,7 +148,16 @@ const FileUpload = ({ onResumeDataExtracted, setLoading }) => {
         name: data.name || '',
         title: data.title || '',
         requisitionNumber: data.requisitionNumber || '',
-        professionalSummary: Array.isArray(data.professionalSummary) ? data.professionalSummary : [],
+        // BUG 5 FIX: split any summary items that contain inline "•" separators
+        professionalSummary: Array.isArray(data.professionalSummary)
+          ? data.professionalSummary.flatMap(item => {
+              if (typeof item !== 'string') return [];
+              if (item.includes('\u2022') || item.includes(' • ')) {
+                return item.split(/\s*[•\u2022]\s*/).map(s => s.trim()).filter(Boolean);
+              }
+              return [item];
+            })
+          : [],
         summarySections: Array.isArray(data.summarySections) ? data.summarySections : [],
         subsections: Array.isArray(data.subsections) ? data.subsections : [],
         employmentHistory: Array.isArray(data.employmentHistory) ? data.employmentHistory : [],
@@ -158,12 +167,17 @@ const FileUpload = ({ onResumeDataExtracted, setLoading }) => {
         skillCategories: Array.isArray(data.skillCategories) ? data.skillCategories : []
       };
       
-      // Ensure employment history has proper structure
+      // BUG 1 FIX: Ensure employment history has proper structure and preserves
+      // all fields (including department/subRole used by the preview renderer).
       sanitized.employmentHistory = sanitized.employmentHistory.map(job => ({
         companyName: job.companyName || '',
         roleName: job.roleName || '',
         workPeriod: job.workPeriod || '',
         location: job.location || '',
+        // Preserve department/subRole — rendered as LINE 3 in the preview
+        department: job.department || '',
+        subRole: job.subRole || '',
+        description: job.description || '',
         responsibilities: Array.isArray(job.responsibilities) ? job.responsibilities : (job.responsibilities ? [job.responsibilities] : []),
         projects: Array.isArray(job.projects) ? job.projects.map(project => ({
           projectName: project.projectName || '',
