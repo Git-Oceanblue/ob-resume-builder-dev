@@ -368,9 +368,9 @@ class ResumeAgentSchemas:
                                     "type": "string",
                                     "pattern": "^[A-Za-z\\s]+, [A-Za-z\\s]+$",
                                     "description": (
-                                        "CRITICAL LOCATION FORMAT: 'City, State/Country' with COMMA + SINGLE SPACE.\n"
-                                        "USA: 2-letter state abbreviation. CORRECT: 'Austin, TX', 'Boston, MA'\n"
-                                        "India: 'City, India' – NO state codes. CORRECT: 'Mumbai, India'\n"
+                                        "CRITICAL LOCATION FORMAT: 'State/Country'.\n"
+                                        "USA: 2-letter state abbreviation. CORRECT: 'TX', 'MA', 'OH', 'GA'\n"
+                                        "India: 'India' – NO state codes, NO city name, NO state name. CORRECT: 'India'\n"
                                         "Extract separately even if combined with school name."
                                     )
                                 },
