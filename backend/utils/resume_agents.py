@@ -1671,7 +1671,7 @@ Return ONLY this JSON object (no other text):
 {
   "education": [
     {
-      "degree": "<BS | MS | MBA | MA | MCom | PhD | JD | AA | AS>",
+      "degree": "<standardised abbreviation or original abbreviation if non-standard>",
       "areaOfStudy": "<field of study>",
       "school": "<institution name only – no location>",
       "location": "<City, ST>  or  <City, Country>",
@@ -1681,11 +1681,18 @@ Return ONLY this JSON object (no other text):
   ]
 }
 
-STANDARDISATION (mandatory):
+CRITICAL: Include EVERY educational entry from the text – never skip any.
+Non-standard qualifications (Diploma, HDCS, Certificate, etc.) MUST be included using their original abbreviation or short name.
+
+STANDARDISATION (apply only when degree clearly matches):
 • BTech / BE / BCom / BA / Bachelor of ... → "BS"
-• MTech / ME / Master of Technology / Master of Engineering → "MS"
+• MTech / ME / MCA / Master of Technology / Master of Engineering / Master of Computer Applications → "MS"
 • MBA → "MBA"   MA → "MA"   PhD / Doctorate → "PhD"
-Sort entries ascending by degree level: BS → MS → MBA → PhD.""",
+• Diploma / Honours Diploma / PG Diploma → keep as "Diploma" (or original abbreviation e.g. "HDCS")
+• If the degree does not match any rule above, use the original abbreviation exactly as written.
+
+Sort entries ascending by degree level where possible: Diploma/Certificate → BS → MS → MBA → PhD.
+If an entry does not fit the sort order, append it at the end rather than omitting it.""",
 
             AgentType.SKILLS: """\
 Return ONLY this JSON object (no other text):

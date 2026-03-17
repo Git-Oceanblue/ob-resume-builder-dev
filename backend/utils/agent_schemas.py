@@ -331,15 +331,21 @@ class ResumeAgentSchemas:
                         "type": "array",
                         "description": (
                             "CRITICAL REQUIREMENTS:\n"
-                            "1) MANDATORY SORTING: Education entries MUST be sorted in ASCENDING order by "
-                            "degree level (lowest degree first).\n"
-                            "   Exact order: AA/AS (lowest) → BS (bachelors) → MS/MA/MBA/MCom (masters) "
-                            "→ PhD/JD (highest).\n"
+                            "1) INCLUDE ALL ENTRIES: Every educational qualification in the text MUST be "
+                            "included. Never skip an entry because the degree type is unusual or does not "
+                            "fit a standard abbreviation (e.g. Diploma, HDCS, Honours Diploma, "
+                            "Certificate, PG Diploma must all be included).\n\n"
+                            "2) SORTING: Sort entries in ASCENDING order by degree level where possible "
+                            "(lowest first). Approximate order: Diploma/Certificate → AA/AS → BS → "
+                            "MS/MA/MBA/MCom → PhD/JD. If an entry cannot be placed in this order, "
+                            "append it at the end rather than omitting it.\n"
                             "   If multiple degrees of same level, sort by date (oldest first).\n\n"
-                            "2) MANDATORY STANDARDIZATION: All bachelor's degrees "
-                            "(BTech/BE/BCom/BA/Bachelor) MUST become 'BS'. "
-                            "All technical master's degrees (MTech/ME/Master) MUST become 'MS'. "
-                            "Keep MBA, MA, MCom, PhD, JD, AA, AS as-is. NO EXCEPTIONS."
+                            "3) STANDARDIZATION: Apply only when the degree clearly matches:\n"
+                            "   BTech/BE/BCom/BA/Bachelor → 'BS'\n"
+                            "   MTech/ME/MCA/Master of Technology/Master of Computer Applications → 'MS'\n"
+                            "   MBA → 'MBA'   MA → 'MA'   MCom → 'MCom'   PhD → 'PhD'\n"
+                            "   Diploma/Honours Diploma/PG Diploma → 'Diploma' (or original abbreviation)\n"
+                            "   If the degree does not match any rule, use the original abbreviation exactly."
                         ),
                         "items": {
                             "type": "object",
@@ -347,13 +353,14 @@ class ResumeAgentSchemas:
                                 "degree": {
                                     "type": "string",
                                     "description": (
-                                        "MANDATORY DEGREE STANDARDIZATION:\n"
-                                        "BTech/BE/BCom/BA/Bachelor → 'BS'\n"
-                                        "MTech/ME/Master of Technology/Master of Engineering → 'MS'\n"
+                                        "Standardised degree abbreviation. Apply these mappings:\n"
+                                        "BTech/BE/BCom/BA/Bachelor of ... → 'BS'\n"
+                                        "MTech/ME/MCA/Master of Technology/Master of Computer Applications → 'MS'\n"
                                         "MBA → 'MBA'   MA → 'MA'   MCom → 'MCom'\n"
                                         "PhD/Doctorate → 'PhD'   JD → 'JD'   AA → 'AA'   AS → 'AS'\n"
-                                        "EXAMPLES: 'Bachelor of Technology' → 'BS', 'B.Tech' → 'BS', "
-                                        "'Master of Technology' → 'MS', 'M.Tech' → 'MS'."
+                                        "Diploma/Honours Diploma/PG Diploma → 'Diploma' or original abbreviation\n"
+                                        "If no rule applies, use the original abbreviation exactly as written.\n"
+                                        "NEVER omit an entry just because the degree type is non-standard."
                                     )
                                 },
                                 "areaOfStudy": {
