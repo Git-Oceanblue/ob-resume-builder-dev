@@ -410,9 +410,22 @@ def remove_vendor_names(text: str) -> str:
     return cleaned.strip()
 
 
+_TECH_LABEL_PATTERN = re.compile(
+    r'^(environment|technologies|tools\s*[&and]*\s*technologies|key\s*technologies[/\s]*skills?)\s*:',
+    re.IGNORECASE
+)
+
+
 def sanitize_responsibilities(items: list) -> list:
-    """Apply remove_vendor_names() to every bullet in a responsibility list."""
-    return [remove_vendor_names(item) for item in items if isinstance(item, str)]
+    """Apply remove_vendor_names() to every bullet in a responsibility list.
+    Also filters out technology/environment label lines (e.g. 'Environment: ...')
+    since those are already captured in keyTechnologies.
+    """
+    return [
+        remove_vendor_names(item)
+        for item in items
+        if isinstance(item, str) and not _TECH_LABEL_PATTERN.match(item.strip())
+    ]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1495,7 +1508,7 @@ class ResumeAgent:
                 "TECHNOLOGY EXTRACTION RULE (CRITICAL):\n"
                 "• STEP 1 — Explicit label (highest priority): Look for a line that begins\n"
                 "  with 'Technologies:', 'Tools & Technologies:', 'Key Technologies/Skills:',\n"
-                "  or similar. If found, copy the COMPLETE comma-separated list exactly as\n"
+                "  'Environment:', or similar. If found, copy the COMPLETE comma-separated list exactly as\n"
                 "  written — do NOT omit or alter any item, including vendor/tool names\n"
                 "  such as Gearset, Conga, MuleSoft, Copado, Azure, Jest, Mocha, etc.\n"
                 "• STEP 2 — Bullet inference (fallback only): Only when NO explicit\n"
@@ -1505,7 +1518,10 @@ class ResumeAgent:
                 "  bullet text — NEVER remove vendor names from keyTechnologies.\n"
                 "• Populate keyTechnologies at project level (if a named project exists)\n"
                 "  or at job level (if no projects). NEVER leave both empty when\n"
-                "  responsibilities or a Technologies label exist.\n\n"
+                "  responsibilities or a Technologies label exist.\n"
+                "• Lines starting with 'Environment:', 'Technologies:', 'Tools & Technologies:',\n"
+                "  or 'Key Technologies/Skills:' MUST NOT be included in responsibilities or\n"
+                "  projectResponsibilities — they belong only in keyTechnologies.\n\n"
                 "LOCATION RULE (ANTI-HALLUCINATION — STRICT):\n"
                 "• ONLY extract location if it is EXPLICITLY written in the resume text.\n"
                 "• DO NOT guess, infer, or assume any city, state, or country.\n"
