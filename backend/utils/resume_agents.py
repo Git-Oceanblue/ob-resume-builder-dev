@@ -634,6 +634,18 @@ def validate_project_not_fabricated(
         )
         return False
 
+    # ── Fast-path: explicit 'Project: NAME' label in source → always accept ──
+    # If the cleaned project title has an explicit heading in the source text,
+    # skip the fuzzy confidence check entirely. This prevents the heuristic
+    # from dropping legitimately labeled projects whose title words happen to
+    # be short or appear in an unexpected order.
+    if _has_explicit_project_label(clean, job_text):
+        logger.debug(
+            "[FIX #10] Project '%s' has explicit label — accepted without "
+            "confidence check.", project_name
+        )
+        return True
+
     # Split into meaningful terms (> 3 chars)
     terms = [t for t in re.split(r'\W+', clean_lower) if len(t) > 3]
     if not terms:
