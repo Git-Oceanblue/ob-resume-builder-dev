@@ -1496,6 +1496,11 @@ class ResumeAgent:
                 "Extract ONLY employment history and work experience. Include ALL jobs with "
                 "COMPLETE details — every bullet, every project. Missing any content is "
                 "a critical data-loss error.\n\n"
+                "VERBATIM EXTRACTION (HIGHEST PRIORITY):\n"
+                "• Copy every responsibility bullet EXACTLY as it appears in the resume.\n"
+                "• Do NOT rephrase, rewrite, condense, or summarise any bullet point.\n"
+                "• Do NOT combine multiple bullets into one or split one bullet into many.\n"
+                "• The only permitted change is removing the leading bullet symbol (•, -, *, etc.).\n\n"
                 "RESUME FORMAT — This resume may use a CLIENT-BASED format:\n"
                 "  'Client: CompanyName, City, State  StartDate – EndDate'\n"
                 "  OR 'Company Name, Location  Date Range'\n"
@@ -1671,13 +1676,13 @@ Return ONLY this JSON object (no other text):
         {
           "projectName": "<EXACT project title as written in the resume, e.g. 'Demand to Renew'>",
           "projectLocation": "<City, Country or empty string>",
-          "projectResponsibilities": ["<bullet 1>", "<bullet 2>", "... ALL bullets without exception"],
+          "projectResponsibilities": ["<bullet 1 exactly as written in the resume>", "<bullet 2 exactly as written>", "... ALL bullets without exception – copy verbatim"],
           "projectDescription": "<project description as written>",
           "keyTechnologies": "<from Technologies: label, or infer from bullets>",
           "period": "<MMM YYYY - MMM YYYY or empty string if same as job period>"
         }
       ],
-      "responsibilities": [],
+      "responsibilities": ["<bullet 1 exactly as written in the resume>", "<bullet 2 exactly as written>"],
       "keyTechnologies": "",
       "subsections": []
     }
@@ -1690,6 +1695,7 @@ STRICT RULES:
 • Jobs WITHOUT explicit project label → projects=[], responsibilities=[...ALL bullets], keyTechnologies="Tech1, Tech2, ..."
 • projectName = EXACT title from resume. Do NOT add 'Project N:' prefix.
 • Extract EVERY responsibility bullet – omitting bullets is a data-loss error.
+• VERBATIM RULE (CRITICAL): Copy every responsibility bullet EXACTLY as written in the resume. Do NOT rephrase, rewrite, shorten, or summarise any bullet. The extracted text must be word-for-word identical to the source.
 • workPeriod format: 'MMM YYYY - MMM YYYY' or 'MMM YYYY - Till Date' (3-letter months only).
 • Location: 'City, ST' (USA) or 'City, Country'. India → 'City, India' only.
 • companyName must NOT contain location or date – strip 'Client:' prefix if present.""",
