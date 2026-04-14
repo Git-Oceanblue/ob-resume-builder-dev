@@ -544,10 +544,10 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
     const RIGHT_TAB = { type: TabStopType.RIGHT, position: 10800 };
 
     // Single-paragraph helper: left text + right-tab + right text, both bold TNR 14pt #1F497D
-    const hdrTabPara = (leftText, rightText) => new Paragraph({
+    const hdrTabPara = (leftText, rightText, spaceBefore = 0) => new Paragraph({
       tabStops: [RIGHT_TAB],
       alignment: AlignmentType.JUSTIFIED,
-      spacing: bodySpacing,
+      spacing: { ...bodySpacing, before: spaceBefore },
       children: [
         new TextRun({ text: leftText, bold: true, boldComplexScript: true, size: 28, color: '1F497D', font: 'Times New Roman' }),
         new TextRun({ text: '\t' }),
@@ -567,13 +567,9 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
         // BUG 2 FIX: normalize month abbreviations in the work period
         const normalizedWorkPeriod = normalizeMonthAbbr(job.workPeriod || '');
 
-        // Spacer between entries — PATTERN B: after=200, line=276 (visible gap)
-        if (index > 0) {
-          paragraphs.push(new Paragraph({ spacing: { after: 200, line: 276, lineRule: 'auto' }, children: [] }));
-        }
-
         // Company name (left) + date range (right) — single paragraph with right tab
-        paragraphs.push(hdrTabPara(job.companyName || 'Company', normalizedWorkPeriod));
+        // Space before: 200 twips above the company name for entries after the first
+        paragraphs.push(hdrTabPara(job.companyName || 'Company', normalizedWorkPeriod, index > 0 ? 200 : 0));
 
         // Job title (left) + location (right, if present)
         if (formattedJobLocation) {
