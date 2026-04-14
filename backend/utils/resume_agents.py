@@ -1,6 +1,7 @@
 
 
 import asyncio
+import difflib
 import json
 import logging
 import os
@@ -428,6 +429,186 @@ def sanitize_responsibilities(items: list) -> list:
     ]
 
 
+def _extract_source_bullets(source_text: str) -> List[str]:
+    """
+    Extract all bullet-like lines and substantial plain lines from the raw
+    source text for use in fuzzy-match verbatim restoration.
+    """
+    bullet_re = re.compile(
+        r'^\s*(?:[•\-\*●◦▪►✓\u2022\u2023\u25E6\u2043]|\d+[\.\)])\s+'
+    )
+    lines = []
+    for line in source_text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if bullet_re.match(stripped):
+            clean = bullet_re.sub('', stripped).strip()
+            if len(clean) > 10:
+                lines.append(clean)
+        elif len(stripped) > 30 and stripped[0].isupper():
+            lines.append(stripped)
+    return lines
+
+
+def restore_verbatim_bullets(
+    extracted_bullets: List[str],
+    source_text: str,
+    threshold: float = 0.60,
+) -> List[str]:
+    """
+    Replace LLM-extracted/paraphrased bullets with the closest matching
+    line from the original source text when similarity >= threshold.
+
+    This is the final safety net against LLM paraphrasing: even if the
+    model rewrites a bullet, this function finds the real sentence and
+    restores it verbatim.
+    """
+    if not source_text or not extracted_bullets:
+        return extracted_bullets
+
+    source_lines = _extract_source_bullets(source_text)
+    if not source_lines:
+        return extracted_bullets
+
+    source_lower = [s.lower() for s in source_lines]
+    restored: List[str] = []
+
+    for bullet in extracted_bullets:
+        if not bullet or not isinstance(bullet, str):
+            restored.append(bullet)
+            continue
+
+        matches = difflib.get_close_matches(
+            bullet.lower(),
+            source_lower,
+            n=1,
+            cutoff=threshold,
+        )
+
+        if matches:
+            matched_lower = matches[0]
+            original = next(
+                (s for s in source_lines if s.lower() == matched_lower),
+                bullet,
+            )
+            if original.lower() != bullet.lower():
+                logger.debug(
+                    "[verbatim] Restored bullet:\n  LLM: %s\n  Src: %s",
+                    bullet[:100], original[:100],
+                )
+            restored.append(original)
+        else:
+            restored.append(bullet)
+
+    return restored
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# DETERMINISTIC GENERAL-BULLET EXTRACTOR
+# ─────────────────────────────────────────────────────────────────────────────
+
+_BULLET_LINE_RE = re.compile(
+    r'^\s*(?:[•\-\*●◦▪►✓\u2022\u2023\u25E6\u2043]|\d+[\.\)])\s+(.+)'
+)
+_PROJECT_LABEL_RE = re.compile(
+    r'^\s*project\s*(?:name\s*)?(?:\d+\s*)?[:\-]\s*\S',
+    re.IGNORECASE,
+)
+# Lines that are clearly headers/metadata — skip these even if they look
+# like plain text (dates, company names, role titles, section headings).
+_SKIP_LINE_RE = re.compile(
+    r'^(?:'
+    # Full or abbreviated month names starting a date range
+    r'(?:january|february|march|april|may|june|july|august|september|october|november|december'
+    r'|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\b'
+    r'|\d{4}\s*[-–—]\s*(?:\d{4}|present|current|till)'         # year ranges
+    r'|(?:client|role|location|technologies|tools|environment'
+    r'|responsibilities|education|summary|skills|certifications'
+    r'|employment|experience)\s*[:\-]'                          # section labels
+    r')',
+    re.IGNORECASE,
+)
+# Lines that are company/location headers — contain an em dash or long dash
+# followed by a city/country (e.g. "Ram Tech Engineering Services — Hyderabad, India")
+_COMPANY_LOCATION_RE = re.compile(r'.{5,}\s*[—–]\s*.{3,}')
+# Plain text line that is long enough to be a responsibility sentence.
+# Must start with a capital letter and be at least 30 chars.
+_PLAIN_RESPONSIBILITY_RE = re.compile(r'^[A-Z].{29,}')
+
+
+def extract_general_bullets_from_text(source_text: str, company_name: str = '') -> List[str]:
+    """
+    Deterministically extract all responsibility lines that appear BEFORE the
+    first 'Project:' / 'Project Name:' label in the experience section text.
+
+    Works with BOTH:
+      • PDF-extracted text  → bullet symbol is present: "• Delivered technical..."
+      • DOCX-extracted text → no bullet symbol:         "Delivered technical..."
+
+    Strategy:
+      1. Scan lines top-to-bottom.
+      2. Stop at the first "Project: X" label.
+      3. Accept a line if it has a bullet symbol OR if it is a plain sentence
+         (starts with capital, ≥ 30 chars) that doesn't look like a header.
+
+    This runs entirely in Python — no LLM involved — immune to model
+    paraphrasing and "responsibilities=[]" hallucinations.
+    """
+    if not source_text:
+        return []
+
+    bullets: List[str] = []
+    found_first_project = False
+
+    for line in source_text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+
+        # Stop at first Project label
+        if _PROJECT_LABEL_RE.match(stripped):
+            found_first_project = True
+            break
+
+        # Skip obvious header / metadata lines
+        if _SKIP_LINE_RE.match(stripped):
+            continue
+
+        # Skip company — location lines (e.g. "Ram Tech Engineering — Hyderabad, India")
+        if _COMPANY_LOCATION_RE.match(stripped):
+            continue
+
+        # Case 1: explicit bullet symbol (PDF, plain-text resumes)
+        m = _BULLET_LINE_RE.match(stripped)
+        if m:
+            bullet_text = m.group(1).strip()
+            if len(bullet_text) > 15:
+                bullets.append(bullet_text)
+            continue
+
+        # Case 2: no bullet symbol (DOCX — list style not captured as character)
+        # Accept lines that look like responsibility sentences.
+        if _PLAIN_RESPONSIBILITY_RE.match(stripped):
+            # Skip lines that are likely a job title or company name (short, no verb)
+            word_count = len(stripped.split())
+            if word_count >= 6:
+                bullets.append(stripped)
+
+    if found_first_project and bullets:
+        logger.info(
+            "[general-bullets] Extracted %d general bullets (pre-project) "
+            "from source text (company: '%s').",
+            len(bullets), company_name,
+        )
+    elif not found_first_project:
+        # No project label found — nothing to rescue (no projects in this job)
+        bullets = []
+
+    return bullets
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # FIX 5b: Company-embedded location extractor
 # ─────────────────────────────────────────────────────────────────────────────
@@ -462,16 +643,18 @@ def extract_location_from_company_name(company_name: str) -> Optional[str]:
 
 def enforce_tech_responsibility_rules(job: Dict[str, Any]) -> Dict[str, Any]:
     """
-    FIX #4: If a job has projects, ensure all content lives inside the project
-    objects — never duplicated at the job level.
+    FIX #4 (updated): Handle the case where a job has BOTH general responsibilities
+    (bullets before any project) AND named projects with their own bullets.
 
-    RESCUE LOGIC (prevents silent data loss):
-      When the LLM puts responsibility bullets at job level but also adds a
-      project name, the bullets must be MOVED into the project — not discarded.
-
-      Similarly, job-level keyTechnologies is moved into projects that have none.
-
-    Only clears job-level fields AFTER the rescue has been attempted.
+    Rules:
+    1. Job-level keyTechnologies is propagated into the first project that has none,
+       then cleared at job level (it lives at project level when projects exist).
+    2. Job-level responsibilities are KEPT when all projects already have their own
+       projectResponsibilities — this means they are genuine general bullets that
+       appear before the project sections and must NOT be discarded.
+    3. Job-level responsibilities are moved into the first project that has no
+       projectResponsibilities only when that project is clearly missing bullets
+       (rescue path for LLMs that put everything at job level).
     """
     projects = job.get('projects')
     if not projects or not isinstance(projects, list):
@@ -479,7 +662,7 @@ def enforce_tech_responsibility_rules(job: Dict[str, Any]) -> Dict[str, Any]:
 
     company = job.get('companyName', '?')
 
-    # ── Rescue job-level keyTechnologies → first project that has none ─────────
+    # ── Rescue job-level keyTechnologies → first project that has none ──────────
     job_tech = (job.get('keyTechnologies') or '').strip()
     if job_tech:
         for proj in projects:
@@ -492,10 +675,31 @@ def enforce_tech_responsibility_rules(job: Dict[str, Any]) -> Dict[str, Any]:
                 break
         job['keyTechnologies'] = ""
 
-    # ── Rescue job-level responsibilities → first project that has none ────────
+    # ── Handle job-level responsibilities alongside projects ────────────────────
     job_resps = job.get('responsibilities')
-    if isinstance(job_resps, list) and job_resps:
-        moved = False
+    if not isinstance(job_resps, list) or not job_resps:
+        return job
+
+    # Check whether every project already has its own responsibilities
+    all_projects_have_resps = all(
+        isinstance(proj, dict) and
+        isinstance(proj.get('projectResponsibilities'), list) and
+        len(proj.get('projectResponsibilities', [])) > 0
+        for proj in projects
+        if isinstance(proj, dict)
+    )
+
+    if all_projects_have_resps:
+        # All projects have their own bullets → the job-level bullets are genuine
+        # general responsibilities (appear before the project sections). KEEP them.
+        logger.info(
+            "[FIX #4] Job '%s' has %d general responsibilities alongside %d projects — "
+            "preserving both (general bullets appear before project sections).",
+            company, len(job_resps), len(projects),
+        )
+        # Do NOT clear job['responsibilities']
+    else:
+        # At least one project has no bullets → rescue job-level bullets into it
         for proj in projects:
             if isinstance(proj, dict):
                 existing = proj.get('projectResponsibilities')
@@ -506,14 +710,7 @@ def enforce_tech_responsibility_rules(job: Dict[str, Any]) -> Dict[str, Any]:
                         "project '%s' for '%s'.",
                         len(job_resps), proj.get('projectName', '?'), company,
                     )
-                    moved = True
                     break
-        if not moved:
-            logger.info(
-                "[FIX #4] All projects already have responsibilities for '%s' — "
-                "discarding %d redundant job-level bullets.",
-                company, len(job_resps),
-            )
         job['responsibilities'] = []
 
     return job
@@ -1518,10 +1715,12 @@ class ResumeAgent:
                 "• Named project exists ONLY when explicitly labeled 'Project Name: X' or 'Project: X'.\n"
                 "• Use EXACTLY the project title as given — do NOT reformat or add 'Project N:' prefix.\n"
                 "• Extract ALL responsibility bullets under that project into projectResponsibilities.\n"
-                "• When project exists, job-level 'responsibilities' MUST be [] and keyTechnologies MUST be ''.\n"
+                "• GENERAL + PROJECT bullets CAN coexist: bullets that appear BEFORE any project label\n"
+                "  belong in job-level 'responsibilities'. Bullets under a specific project label belong\n"
+                "  in that project's 'projectResponsibilities'. NEVER discard either group.\n"
                 "• 'Roles Played: X' is a ROLE TITLE, NOT a project name.\n"
                 "• 'Project Description: ...' is the projectDescription field.\n"
-                "• If NO explicit project label exists, use responsibilities=[] with all bullets, projects=[].\n\n"
+                "• If NO explicit project label exists, put ALL bullets in responsibilities, projects=[].\n\n"
                 "TECHNOLOGY EXTRACTION RULE (CRITICAL):\n"
                 "• STEP 1 — Explicit label (highest priority): Look for a line that begins\n"
                 "  with 'Technologies:', 'Tools & Technologies:', 'Key Technologies/Skills:',\n"
@@ -1691,8 +1890,10 @@ Return ONLY this JSON object (no other text):
 
 STRICT RULES:
 • Include ALL jobs – missing even one is a critical error.
-• Jobs WITH 'Project Name: X' or 'Project: X' → projects=[{projectName: "X", projectResponsibilities: [...ALL bullets], ...}], responsibilities=[], keyTechnologies=""
-• Jobs WITHOUT explicit project label → projects=[], responsibilities=[...ALL bullets], keyTechnologies="Tech1, Tech2, ..."
+• Jobs WITH named projects AND general bullets before them → responsibilities=[...general bullets BEFORE first project], projects=[{projectName, projectResponsibilities:[...bullets under that project], ...}]
+• Jobs WITH named projects but NO general bullets before them → responsibilities=[], projects=[...]
+• Jobs WITHOUT any explicit project label → projects=[], responsibilities=[...ALL bullets], keyTechnologies="Tech1, Tech2, ..."
+• NEVER discard bullets that appear before the first project label — they are general responsibilities and belong in job-level responsibilities[].
 • projectName = EXACT title from resume. Do NOT add 'Project N:' prefix.
 • Extract EVERY responsibility bullet – omitting bullets is a data-loss error.
 • VERBATIM RULE (CRITICAL): Copy every responsibility bullet EXACTLY as written in the resume. Do NOT rephrase, rewrite, shorten, or summarise any bullet. The extracted text must be word-for-word identical to the source.
@@ -2052,11 +2253,28 @@ CRITICAL RULES:
 
                 # ── Responsibilities ──────────────────────────────────────────
                 if job.get('responsibilities') and isinstance(job['responsibilities'], list):
-                    job['responsibilities'] = sanitize_responsibilities([
+                    cleaned = sanitize_responsibilities([
                         strip_bullet_prefix(item)
                         for item in job['responsibilities']
                         if isinstance(item, str)
                     ])
+                    job['responsibilities'] = restore_verbatim_bullets(cleaned, source_text)
+
+                # ── DETERMINISTIC RESCUE: general bullets before project labels ─
+                # If the LLM returned responsibilities=[] but the source text has
+                # bullet lines before the first "Project:" label, extract them
+                # directly from the text — no LLM involved.
+                has_projects = bool(job.get('projects') and isinstance(job['projects'], list) and job['projects'])
+                has_resps    = bool(job.get('responsibilities') and isinstance(job['responsibilities'], list) and job['responsibilities'])
+                if has_projects and not has_resps and source_text:
+                    rescued = extract_general_bullets_from_text(source_text, job.get('companyName', ''))
+                    if rescued:
+                        job['responsibilities'] = rescued
+                        logger.info(
+                            "[RESCUE-GENERAL] Injected %d general bullets from source text "
+                            "into job '%s / %s' (LLM had returned responsibilities=[]).",
+                            len(rescued), job.get('companyName', '?'), job.get('roleName', '?'),
+                        )
 
                 # ── Subsections ───────────────────────────────────────────────
                 if job.get('subsections') and isinstance(job['subsections'], list):
@@ -2099,11 +2317,14 @@ CRITICAL RULES:
                         if project.get('projectResponsibilities') and isinstance(
                             project['projectResponsibilities'], list
                         ):
-                            project['projectResponsibilities'] = sanitize_responsibilities([
+                            cleaned_proj = sanitize_responsibilities([
                                 strip_bullet_prefix(item)
                                 for item in project['projectResponsibilities']
                                 if isinstance(item, str)
                             ])
+                            project['projectResponsibilities'] = restore_verbatim_bullets(
+                                cleaned_proj, source_text
+                            )
 
                         validated_projects.append(project)
 

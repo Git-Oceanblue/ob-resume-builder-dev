@@ -594,6 +594,13 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
           );
         }
 
+        // General responsibilities (before projects — these are job-level bullets)
+        if (job.responsibilities && job.responsibilities.length > 0 && job.responsibilities.some(r => r.trim())) {
+          job.responsibilities.forEach(resp => {
+            if (resp.trim()) paragraphs.push(bulletPara(resp));
+          });
+        }
+
         // Projects
         if (job.projects && job.projects.length > 0) {
           const totalProjects = job.projects.length;
@@ -642,19 +649,7 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
           });
         }
 
-        // General responsibilities
-        if (job.responsibilities && job.responsibilities.length > 0 && job.responsibilities.some(r => r.trim())) {
-          paragraphs.push(
-            new Paragraph({
-              alignment: AlignmentType.JUSTIFIED,
-              spacing: bodySpacing,
-              children: [new TextRun({ text: 'Responsibilities', bold: true, font: 'Calibri', size: 22 })],
-            })
-          );
-          job.responsibilities.forEach(resp => {
-            if (resp.trim()) paragraphs.push(bulletPara(resp));
-          });
-        }
+        // General responsibilities already rendered above (before projects)
 
         // Subsections
         if (job.subsections && job.subsections.length > 0) {
@@ -1172,6 +1167,15 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
                     <p className="my-2 text-gray-800">{job.description}</p>
                   )}
 
+                  {/* General responsibilities — rendered BEFORE projects */}
+                  {job.responsibilities && job.responsibilities.length > 0 && (
+                    <ul className="list-disc pl-5 space-y-1 mt-2">
+                      {job.responsibilities.map((resp, respIndex) => (
+                        <li key={respIndex} className="text-gray-800">{stripBullet(resp)}</li>
+                      ))}
+                    </ul>
+                  )}
+
                   {/* Projects */}
                   {job.projects && job.projects.length > 0 && (
                     <div className="mt-3">
@@ -1210,16 +1214,7 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
                     </div>
                   )}
 
-                {job.responsibilities && job.responsibilities.length > 0 && (
-                  <div className="mt-2">
-                    <p className="font-medium">Responsibilities:</p>
-                    <ul className="list-disc pl-5 space-y-1">
-                      {job.responsibilities.map((resp, respIndex) => (
-                        <li key={respIndex} className="text-gray-800">{stripBullet(resp)}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
+                {/* General responsibilities already rendered above (before projects) */}
 
                 {/* Subsections */}
                 {job.subsections && job.subsections.length > 0 && job.subsections.map((subsection, subIndex) => (
