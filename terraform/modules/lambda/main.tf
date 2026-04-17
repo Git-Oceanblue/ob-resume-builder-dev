@@ -33,6 +33,33 @@ resource "aws_iam_role_policy" "lambda_policy" {
           "logs:PutLogEvents"
         ],
         Resource = "arn:aws:logs:*:*:*"
+      },
+      {
+        Effect = "Allow",
+        Action = [
+          "s3:GetObject",
+          "s3:PutObject",
+          "s3:DeleteObject",
+          "s3:ListBucket",
+          "s3:GeneratePresignedUrl"
+        ],
+        Resource = var.resumes_s3_bucket != "" ? [
+          "arn:aws:s3:::${var.resumes_s3_bucket}",
+          "arn:aws:s3:::${var.resumes_s3_bucket}/*"
+        ] : ["arn:aws:s3:::placeholder-disabled"]
+      },
+      {
+        Effect = "Allow",
+        Action = [
+          "dynamodb:GetItem",
+          "dynamodb:PutItem",
+          "dynamodb:DeleteItem",
+          "dynamodb:Query",
+          "dynamodb:Scan"
+        ],
+        Resource = var.dynamodb_table != "" ? [
+          "arn:aws:dynamodb:*:*:table/${var.dynamodb_table}"
+        ] : ["arn:aws:dynamodb:*:*:table/placeholder-disabled"]
       }
     ]
   })
@@ -50,8 +77,11 @@ resource "aws_lambda_function" "backend" {
 
   environment {
     variables = {
-      ENVIRONMENT     = var.environment,
-      OPENAI_API_KEY  = var.openai_api_key
+      ENVIRONMENT           = var.environment
+      OPENAI_API_KEY        = var.openai_api_key
+      RESUMES_S3_BUCKET     = var.resumes_s3_bucket
+      DYNAMODB_CACHE_TABLE  = var.dynamodb_table
+      CACHE_TTL_HOURS       = "24"
     }
   }
 

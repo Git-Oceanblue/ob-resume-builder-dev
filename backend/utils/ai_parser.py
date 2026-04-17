@@ -5,16 +5,10 @@ from typing import Dict, Any, AsyncGenerator
 from dotenv import load_dotenv, find_dotenv
 
 from .openai_client import OpenAIClient
-from .chunk_resume import chunk_resume_from_bold_headings
 
-# Load .env from the nearest .env file found by traversing parent directories
 load_dotenv(find_dotenv())
 
 logger = logging.getLogger(__name__)
-
-# ─────────────────────────────────────────────────────────────────────────────
-# CLIENT INITIALISATION
-# ─────────────────────────────────────────────────────────────────────────────
 
 _api_key = os.getenv('OPENAI_API_KEY', '')
 if not _api_key:
@@ -26,26 +20,16 @@ client = OpenAIClient(
 )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# STREAM PROCESSING
-# ─────────────────────────────────────────────────────────────────────────────
-
 async def stream_resume_processing(extracted_text: str) -> AsyncGenerator[Dict[str, Any], None]:
     """
-    Simple resume processing - just loading and final result.
+    Stream all agent pipeline events (start, complete, final_data, error).
     """
     logger.info('Starting resume processing...')
-
     try:
         from .resume_agents import MultiAgentResumeProcessor
-
         processor = MultiAgentResumeProcessor(client)
-
-        async for update in processor.process_resume_with_agents(extracted_text):
-            if update.get('type') == 'final_data':
-                yield update
-                return
-
+        async for event in processor.process_resume_with_agents(extracted_text):
+            yield event
     except Exception as error:
         logger.error(f'❌ Resume processing error: {error}')
         yield {

@@ -503,15 +503,15 @@ const ResumeForm = ({ initialData, onSubmit, onChange, onBack }) => {
     });
   };
 
-  // Add new summary subsection
-  const addSummarySubsection = () => {
+  // Add new summary subsection (optionally with a pre-filled title)
+  const addSummarySubsection = (title = '') => {
     setFormData({
       ...formData,
       summarySections: [
         ...(formData.summarySections || []),
         {
-          title: '',
-          content: []
+          title: title,
+          content: title ? [''] : []
         }
       ]
     });
@@ -1297,15 +1297,31 @@ const ResumeForm = ({ initialData, onSubmit, onChange, onBack }) => {
           
           {/* Summary Subsections */}
           <div className="mt-4">
-            <div className="flex justify-between items-center mb-2">
+            <div className="flex flex-wrap justify-between items-center mb-2 gap-2">
               <label className="block text-sm font-medium text-gray-700">Summary Subsections</label>
-              <button 
-                type="button" 
-                onClick={addSummarySubsection}
-                className="text-blue-600 hover:text-blue-800 text-sm"
-              >
-                <FiPlus className="inline mr-1" /> Add Subsection
-              </button>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => addSummarySubsection('Key Technologies')}
+                  className="text-green-600 hover:text-green-800 text-sm"
+                >
+                  <FiPlus className="inline mr-1" /> Add Key Technologies
+                </button>
+                <button
+                  type="button"
+                  onClick={() => addSummarySubsection('Key Strengths')}
+                  className="text-purple-600 hover:text-purple-800 text-sm"
+                >
+                  <FiPlus className="inline mr-1" /> Add Key Strengths
+                </button>
+                <button
+                  type="button"
+                  onClick={() => addSummarySubsection()}
+                  className="text-blue-600 hover:text-blue-800 text-sm"
+                >
+                  <FiPlus className="inline mr-1" /> Add Subsection
+                </button>
+              </div>
             </div>
             
             {formData.summarySections && formData.summarySections.map((subsection, subIndex) => (
