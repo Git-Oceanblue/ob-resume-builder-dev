@@ -549,10 +549,10 @@ const GeneratedResume = React.forwardRef(({ resumeData, previewMode = false, onG
     const RIGHT_TAB = { type: TabStopType.RIGHT, position: 10800 };
 
     // Single-paragraph helper: left text + right-tab + right text, both bold TNR 14pt #1F497D
-    const hdrTabPara = (leftText, rightText) => new Paragraph({
+    const hdrTabPara = (leftText, rightText, spaceBefore = 0) => new Paragraph({
       tabStops: [RIGHT_TAB],
       alignment: AlignmentType.JUSTIFIED,
-      spacing: bodySpacing,
+      spacing: { ...bodySpacing, before: spaceBefore },
       children: [
         new TextRun({ text: leftText, bold: true, boldComplexScript: true, size: 28, color: '1F497D', font: 'Times New Roman' }),
         new TextRun({ text: '\t' }),
@@ -572,13 +572,9 @@ const GeneratedResume = React.forwardRef(({ resumeData, previewMode = false, onG
         // BUG 2 FIX: normalize month abbreviations in the work period
         const normalizedWorkPeriod = normalizeMonthAbbr(job.workPeriod || '');
 
-        // Spacer between entries — PATTERN B: after=200, line=276 (visible gap)
-        if (index > 0) {
-          paragraphs.push(new Paragraph({ spacing: { after: 200, line: 276, lineRule: 'auto' }, children: [] }));
-        }
-
         // Company name (left) + date range (right) — single paragraph with right tab
-        paragraphs.push(hdrTabPara(job.companyName || 'Company', normalizedWorkPeriod));
+        // Space before: 200 twips above the company name for entries after the first
+        paragraphs.push(hdrTabPara(job.companyName || 'Company', normalizedWorkPeriod, index > 0 ? 200 : 0));
 
         // Job title (left) + location (right, if present)
         if (formattedJobLocation) {
@@ -597,6 +593,13 @@ const GeneratedResume = React.forwardRef(({ resumeData, previewMode = false, onG
               children: [new TextRun({ text: departmentOrSubRole, font: 'Calibri', size: 22 })],
             })
           );
+        }
+
+        // General responsibilities (before projects — these are job-level bullets)
+        if (job.responsibilities && job.responsibilities.length > 0 && job.responsibilities.some(r => r.trim())) {
+          job.responsibilities.forEach(resp => {
+            if (resp.trim()) paragraphs.push(bulletPara(resp));
+          });
         }
 
         // Projects
@@ -647,19 +650,7 @@ const GeneratedResume = React.forwardRef(({ resumeData, previewMode = false, onG
           });
         }
 
-        // General responsibilities
-        if (job.responsibilities && job.responsibilities.length > 0 && job.responsibilities.some(r => r.trim())) {
-          paragraphs.push(
-            new Paragraph({
-              alignment: AlignmentType.JUSTIFIED,
-              spacing: bodySpacing,
-              children: [new TextRun({ text: 'Responsibilities', bold: true, font: 'Calibri', size: 22 })],
-            })
-          );
-          job.responsibilities.forEach(resp => {
-            if (resp.trim()) paragraphs.push(bulletPara(resp));
-          });
-        }
+        // General responsibilities already rendered above (before projects)
 
         // Subsections
         if (job.subsections && job.subsections.length > 0) {
@@ -1184,6 +1175,15 @@ const GeneratedResume = React.forwardRef(({ resumeData, previewMode = false, onG
                     <p className="my-2 text-gray-800">{job.description}</p>
                   )}
 
+                  {/* General responsibilities — rendered BEFORE projects */}
+                  {job.responsibilities && job.responsibilities.length > 0 && (
+                    <ul className="list-disc pl-5 space-y-1 mt-2">
+                      {job.responsibilities.map((resp, respIndex) => (
+                        <li key={respIndex} className="text-gray-800">{stripBullet(resp)}</li>
+                      ))}
+                    </ul>
+                  )}
+
                   {/* Projects */}
                   {job.projects && job.projects.length > 0 && (
                     <div className="mt-3">
@@ -1222,16 +1222,7 @@ const GeneratedResume = React.forwardRef(({ resumeData, previewMode = false, onG
                     </div>
                   )}
 
-                {job.responsibilities && job.responsibilities.length > 0 && (
-                  <div className="mt-2">
-                    <p className="font-medium">Responsibilities:</p>
-                    <ul className="list-disc pl-5 space-y-1">
-                      {job.responsibilities.map((resp, respIndex) => (
-                        <li key={respIndex} className="text-gray-800">{stripBullet(resp)}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
+                {/* General responsibilities already rendered above (before projects) */}
 
                 {/* Subsections */}
                 {job.subsections && job.subsections.length > 0 && job.subsections.map((subsection, subIndex) => (

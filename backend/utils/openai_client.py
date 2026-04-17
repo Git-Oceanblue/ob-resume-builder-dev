@@ -44,6 +44,8 @@ class OpenAIClient:
             model=self.model_id,
             messages=messages,
             max_tokens=max_tokens,
+            temperature=0,
+            response_format={"type": "json_object"},
         )
 
         text = response.choices[0].message.content or ""
