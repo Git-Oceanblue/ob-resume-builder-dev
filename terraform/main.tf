@@ -99,10 +99,13 @@ resource "aws_dynamodb_table" "resume_cache" {
 module "lambda" {
   source = "./modules/lambda"
 
-  function_name = "resume-auto-backend-${var.environment}"
-  environment   = var.environment
-  lambda_zip_path   = var.lambda_zip_path
-  openai_api_key    = var.openai_api_key
-  resumes_s3_bucket = aws_s3_bucket.resumes.id
-  dynamodb_table    = aws_dynamodb_table.resume_cache.name
+  function_name           = "resume-auto-backend-${var.environment}"
+  environment             = var.environment
+  lambda_s3_bucket        = var.lambda_s3_bucket
+  lambda_s3_key           = var.lambda_s3_key
+  lambda_source_code_hash = var.lambda_source_code_hash
+  openai_api_key          = var.openai_api_key
+  openai_model_id         = var.openai_model_id
+  resumes_s3_bucket       = aws_s3_bucket.resumes.id
+  dynamodb_table          = aws_dynamodb_table.resume_cache.name
 }

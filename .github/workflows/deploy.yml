@@ -7,6 +7,9 @@ on:
 
 env:
   AWS_REGION: us-east-2
+  # Terraform state bucket — also used to stage the Lambda zip before deploy
+  TF_STATE_BUCKET: resumes-auto-terraform-state
+  LAMBDA_S3_KEY: lambda-artifacts/lambda.zip
 
 jobs:
   deploy:
@@ -26,6 +29,7 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
+      # ── Build Lambda zip ────────────────────────────────────────────────────
       - name: Build backend Lambda artifact (Amazon Linux)
         run: |
           set -e
@@ -40,6 +44,21 @@ jobs:
               cp -r utils main.py lambda_handler.py /app/.bundle/ && \
               cd /app/.bundle && zip -r /out/lambda.zip . -x '*.pyc' '__pycache__/*' '.env' 'README.md'"
 
+      # ── Upload zip to S3 (bypasses the 70 MB Lambda direct-upload limit) ───
+      - name: Upload Lambda zip to S3
+        run: |
+          aws s3 cp dist/lambda.zip \
+            s3://${{ env.TF_STATE_BUCKET }}/${{ env.LAMBDA_S3_KEY }} \
+            --region ${{ env.AWS_REGION }}
+
+      # Compute SHA-256 hash so Terraform can detect code changes
+      - name: Compute Lambda zip hash
+        id: lambda_hash
+        run: |
+          HASH=$(openssl dgst -sha256 -binary dist/lambda.zip | openssl enc -base64)
+          echo "hash=$HASH" >> $GITHUB_OUTPUT
+
+      # ── Terraform ───────────────────────────────────────────────────────────
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
@@ -56,8 +75,11 @@ jobs:
         run: |
           terraform apply -auto-approve \
             -var "environment=dev" \
-            -var "lambda_zip_path=../dist/lambda.zip"
+            -var "lambda_s3_bucket=${{ env.TF_STATE_BUCKET }}" \
+            -var "lambda_s3_key=${{ env.LAMBDA_S3_KEY }}" \
+            -var "lambda_source_code_hash=${{ steps.lambda_hash.outputs.hash }}"
 
+      # ── Build & deploy frontend ─────────────────────────────────────────────
       - name: Export API URL output
         id: tf_outputs
         working-directory: terraform
@@ -68,7 +90,7 @@ jobs:
         working-directory: frontend
         env:
           REACT_APP_API_URL: ${{ steps.tf_outputs.outputs.api_url }}
-          CI: "false"   
+          CI: "false"
         run: |
           npm install
           npm run build

@@ -19,9 +19,27 @@ variable "project_name" {
   default     = "resume-auto"
 }
 
-variable "lambda_zip_path" {
-  description = "Local path to the packaged Lambda zip (built by CI)"
+# ── Lambda deployment (S3 upload — bypasses the 70 MB direct-upload limit) ───
+variable "lambda_s3_bucket" {
+  description = "S3 bucket that holds the Lambda deployment zip (use the Terraform state bucket)"
   type        = string
+}
+
+variable "lambda_s3_key" {
+  description = "S3 key for the Lambda zip (e.g. lambda-artifacts/lambda.zip)"
+  type        = string
+  default     = "lambda-artifacts/lambda.zip"
+}
+
+variable "lambda_source_code_hash" {
+  description = "Base64-encoded SHA-256 of the Lambda zip — lets Terraform detect code changes"
+  type        = string
+}
+
+variable "openai_model_id" {
+  description = "OpenAI model ID passed to the Lambda (e.g. gpt-4.1-mini, gpt-4o-mini)"
+  type        = string
+  default     = "gpt-4.1-mini"
 }
 
 variable "openai_api_key" {

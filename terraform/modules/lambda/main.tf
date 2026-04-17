@@ -66,22 +66,25 @@ resource "aws_iam_role_policy" "lambda_policy" {
 }
 
 resource "aws_lambda_function" "backend" {
-  filename         = var.lambda_zip_path
+  # Deploy from S3 to avoid the 70 MB direct-upload limit (S3 supports 250 MB)
+  s3_bucket        = var.lambda_s3_bucket
+  s3_key           = var.lambda_s3_key
   function_name    = var.function_name
   role             = aws_iam_role.lambda_role.arn
   handler          = "lambda_handler.lambda_handler"
   runtime          = "python3.9"
   timeout          = 300
   memory_size      = 1024
-  source_code_hash = filebase64sha256(var.lambda_zip_path)
+  source_code_hash = var.lambda_source_code_hash
 
   environment {
     variables = {
-      ENVIRONMENT           = var.environment
-      OPENAI_API_KEY        = var.openai_api_key
-      RESUMES_S3_BUCKET     = var.resumes_s3_bucket
-      DYNAMODB_CACHE_TABLE  = var.dynamodb_table
-      CACHE_TTL_HOURS       = "24"
+      ENVIRONMENT          = var.environment
+      OPENAI_API_KEY       = var.openai_api_key
+      OPENAI_MODEL_ID      = var.openai_model_id
+      RESUMES_S3_BUCKET    = var.resumes_s3_bucket
+      DYNAMODB_CACHE_TABLE = var.dynamodb_table
+      CACHE_TTL_HOURS      = "24"
     }
   }
 
