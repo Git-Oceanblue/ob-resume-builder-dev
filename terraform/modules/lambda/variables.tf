@@ -18,3 +18,15 @@ variable "openai_api_key" {
   type        = string
   sensitive   = true
 }
+
+variable "resumes_s3_bucket" {
+  description = "S3 bucket name for resume storage"
+  type        = string
+  default     = ""
+}
+
+variable "dynamodb_table" {
+  description = "DynamoDB table name for resume caching"
+  type        = string
+  default     = ""
+}

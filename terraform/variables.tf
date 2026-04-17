@@ -29,3 +29,20 @@ variable "openai_api_key" {
   type        = string
   sensitive   = true
 }
+
+# ── Custom domain (optional) ─────────────────────────────────────────────────
+# Leave empty to manage the domain manually in the AWS Console (recommended
+# when you have already connected your domain and don't want Terraform to
+# touch it).  Set both variables to let Terraform manage the domain.
+
+variable "custom_domain" {
+  description = "Custom domain for CloudFront (e.g. app.oceanblue.com). Leave empty to protect manual Console setup."
+  type        = string
+  default     = ""
+}
+
+variable "acm_certificate_arn" {
+  description = "ACM certificate ARN in us-east-1 for the custom domain. Leave empty to protect manual Console setup."
+  type        = string
+  default     = ""
+}

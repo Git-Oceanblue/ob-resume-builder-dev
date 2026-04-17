@@ -10,7 +10,7 @@ resource "aws_cloudfront_origin_access_control" "frontend" {
 # CloudFront distribution
 resource "aws_cloudfront_distribution" "frontend" {
   comment = "resume-auto-${var.environment}"
-  
+
   origin {
     domain_name              = var.s3_bucket_domain_name
     origin_access_control_id = aws_cloudfront_origin_access_control.frontend.id
@@ -21,6 +21,11 @@ resource "aws_cloudfront_distribution" "frontend" {
   is_ipv6_enabled     = true
   default_root_object = "index.html"
 
+  # Custom domain aliases — only set when variable is provided.
+  # If you configured aliases manually in the Console, Terraform will ignore
+  # this field on subsequent applies (see lifecycle block below).
+  aliases = var.custom_domain != "" ? [var.custom_domain] : []
+
   default_cache_behavior {
     allowed_methods  = ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"]
     cached_methods   = ["GET", "HEAD"]
@@ -28,7 +33,6 @@ resource "aws_cloudfront_distribution" "frontend" {
 
     forwarded_values {
       query_string = false
-
       cookies {
         forward = "none"
       }
@@ -38,7 +42,7 @@ resource "aws_cloudfront_distribution" "frontend" {
     min_ttl                = 0
     default_ttl            = 3600
     max_ttl                = 86400
-    compress              = true
+    compress               = true
   }
 
   # Cache behavior for static assets
@@ -51,7 +55,6 @@ resource "aws_cloudfront_distribution" "frontend" {
     forwarded_values {
       query_string = false
       headers      = ["Origin"]
-
       cookies {
         forward = "none"
       }
@@ -82,12 +85,34 @@ resource "aws_cloudfront_distribution" "frontend" {
     }
   }
 
+  # Viewer certificate:
+  # - If acm_certificate_arn is provided → use ACM cert (required for custom domains)
+  # - Otherwise fall back to the default CloudFront certificate
+  viewer_certificate {
+    acm_certificate_arn            = var.acm_certificate_arn != "" ? var.acm_certificate_arn : null
+    ssl_support_method             = var.acm_certificate_arn != "" ? "sni-only" : null
+    minimum_protocol_version       = var.acm_certificate_arn != "" ? "TLSv1.2_2021" : null
+    cloudfront_default_certificate = var.acm_certificate_arn == ""
+  }
+
   tags = {
     Environment = var.environment
   }
 
-  viewer_certificate {
-    cloudfront_default_certificate = true
+  # ── CRITICAL: protect manually-configured domain settings ──────────────────
+  # Terraform only knows what it originally created. Any domain / certificate
+  # you wired up in the AWS Console (aliases, viewer_certificate) lives outside
+  # Terraform state, so every apply would overwrite those fields back to the
+  # defaults and destroy your custom domain setup.
+  #
+  # ignore_changes tells Terraform: "I own these fields — don't touch them."
+  # To change aliases/cert via Terraform in future, supply the variables above
+  # and then run:  terraform apply -target=module.cloudfront
+  lifecycle {
+    ignore_changes = [
+      aliases,
+      viewer_certificate,
+    ]
   }
 
   depends_on = [aws_cloudfront_origin_access_control.frontend]

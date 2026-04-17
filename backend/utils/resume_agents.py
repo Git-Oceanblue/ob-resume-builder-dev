@@ -1412,6 +1412,16 @@ _AGENT_MAX_TOKENS: Dict[AgentType, int] = {
     AgentType.CERTIFICATIONS: 8192,
 }
 
+# Display metadata for each agent type (used for frontend progress events)
+_AGENT_DISPLAY: Dict[AgentType, Dict[str, str]] = {
+    AgentType.HEADER:         {"id": "header",         "name": "Header Agent",          "desc": "Extracting contact details and title..."},
+    AgentType.SUMMARY:        {"id": "summary",        "name": "Summary Agent",         "desc": "Extracting professional summary..."},
+    AgentType.EXPERIENCE:     {"id": "experience",     "name": "Experience Agent",      "desc": "Parsing employment history and projects..."},
+    AgentType.EDUCATION:      {"id": "education",      "name": "Education Agent",       "desc": "Extracting education records..."},
+    AgentType.SKILLS:         {"id": "skills",         "name": "Skills Agent",          "desc": "Categorizing technical skills..."},
+    AgentType.CERTIFICATIONS: {"id": "certifications", "name": "Certifications Agent",  "desc": "Extracting certifications and credentials..."},
+}
+
 
 @dataclass
 class AgentResult:
@@ -1421,6 +1431,7 @@ class AgentResult:
     processing_time: float
     success: bool
     error_message: Optional[str] = None
+    token_stats: Optional[Dict[str, Any]] = None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1899,6 +1910,19 @@ CRITICAL RULES:
             processing_time = (datetime.now() - start_time).total_seconds()
             log_cache_analysis(response, self.agent_type.value)
 
+            # Capture per-agent token usage
+            _usage = response.get('usage', {})
+            _inp   = _usage.get('prompt_tokens', 0)
+            _out   = _usage.get('completion_tokens', 0)
+            from .token_logger import calculate_cost as _calc_cost
+            _token_stats = {
+                'promptTokens':     _inp,
+                'completionTokens': _out,
+                'totalTokens':      _inp + _out,
+                'cost':             _calc_cost(_inp, _out, self.client.model_id),
+                'processingTime':   round(processing_time, 3),
+            }
+
             # ── Parse response ────────────────────────────────────────────────
             raw_text       = OpenAIClient.extract_content(response)
             extracted_data = self._extract_json_from_text(raw_text)
@@ -1928,6 +1952,7 @@ CRITICAL RULES:
                 data=cleaned_data,
                 processing_time=processing_time,
                 success=True,
+                token_stats=_token_stats,
             )
 
         except json.JSONDecodeError as e:
@@ -2240,27 +2265,41 @@ class MultiAgentResumeProcessor:
         self,
         raw_text: str,
     ) -> AsyncGenerator[Dict[str, Any], None]:
-        """Process resume using multiple specialized agents in parallel."""
+        """Process resume using multiple specialized agents; streams per-agent events."""
         logger.info("Starting resume processing...")
 
         try:
             from .chunk_resume import chunk_resume_from_bold_headings
 
-            # Chunk the resume
+            # ── Phase 1: File Preprocessor ───────────────────────────────────
+            yield {
+                'type': 'agent_start',
+                'agentId': 'preprocessor',
+                'agentName': 'File Preprocessor',
+                'desc': 'Parsing and chunking resume sections...',
+                'timestamp': datetime.now().isoformat(),
+            }
+            _pre_start = datetime.now()
             sections = chunk_resume_from_bold_headings(raw_text)
-
             if 'error' in sections:
                 logger.warning(
                     f"Chunking failed: {sections['error']} – "
                     "using full resume for all agents"
                 )
                 sections = {}
-
             # ✅ FIX #9: Reorder sections to standard order
             if sections:
                 sections = reorder_sections_to_standard(sections)
+            yield {
+                'type': 'agent_complete',
+                'agentId': 'preprocessor',
+                'success': True,
+                'processingTime': round((datetime.now() - _pre_start).total_seconds(), 3),
+                'tokenStats': None,
+                'timestamp': datetime.now().isoformat(),
+            }
 
-            # Create all agents
+            # ── Phase 2: Parallel LLM extraction agents ──────────────────────
             agents = [
                 ResumeAgent(self.client, AgentType.HEADER),
                 ResumeAgent(self.client, AgentType.SUMMARY),
@@ -2269,36 +2308,104 @@ class MultiAgentResumeProcessor:
                 ResumeAgent(self.client, AgentType.SKILLS),
                 ResumeAgent(self.client, AgentType.CERTIFICATIONS),
             ]
-
-            # Prepare inputs for each agent
             agent_inputs = self._prepare_agent_inputs(agents, sections, raw_text)
 
-            # Run all agents in parallel – model is configured inside OpenAIClient
-            agent_tasks = [
-                agent.process(agent_inputs['inputs'][agent.agent_type])
+            # Announce all agents as starting simultaneously
+            for agent in agents:
+                disp = _AGENT_DISPLAY[agent.agent_type]
+                yield {
+                    'type': 'agent_start',
+                    'agentId': disp['id'],
+                    'agentName': disp['name'],
+                    'desc': disp['desc'],
+                    'timestamp': datetime.now().isoformat(),
+                }
+
+            # Run all agents in parallel; emit completion events as each finishes
+            task_to_agent: Dict[asyncio.Task, ResumeAgent] = {
+                asyncio.create_task(
+                    agent.process(agent_inputs['inputs'][agent.agent_type])
+                ): agent
                 for agent in agents
+            }
+            pending  = set(task_to_agent.keys())
+            all_results: List[AgentResult] = []
+
+            while pending:
+                done, pending = await asyncio.wait(
+                    pending, return_when=asyncio.FIRST_COMPLETED
+                )
+                for task in done:
+                    agent = task_to_agent[task]
+                    disp  = _AGENT_DISPLAY[agent.agent_type]
+                    exc   = task.exception()
+                    if exc:
+                        logger.error(f"Agent task raised exception: {exc}")
+                        yield {
+                            'type': 'agent_complete',
+                            'agentId': disp['id'],
+                            'success': False,
+                            'processingTime': 0,
+                            'tokenStats': None,
+                            'timestamp': datetime.now().isoformat(),
+                        }
+                    else:
+                        result = task.result()
+                        all_results.append(result)
+                        yield {
+                            'type': 'agent_complete',
+                            'agentId': disp['id'],
+                            'success': result.success,
+                            'processingTime': result.processing_time,
+                            'tokenStats': result.token_stats,
+                            'timestamp': datetime.now().isoformat(),
+                        }
+
+            # ── Phase 3: Validator & Normalizer ──────────────────────────────
+            yield {
+                'type': 'agent_start',
+                'agentId': 'validator',
+                'agentName': 'Validator & Normalizer',
+                'desc': 'Validating and normalizing all extracted data...',
+                'timestamp': datetime.now().isoformat(),
+            }
+            _val_start = datetime.now()
+            successful_results = [r for r in all_results if r.success]
+            failed_agents      = [
+                f"{r.agent_type.value}: {r.error_message}"
+                for r in all_results if not r.success
             ]
-            results = await asyncio.gather(*agent_tasks, return_exceptions=True)
-
-            successful_results = []
-            failed_agents = []
-
-            for result in results:
-                if isinstance(result, Exception):
-                    logger.error(f"Agent task raised exception: {result}")
-                    failed_agents.append(str(result))
-                    continue
-                if result.success:
-                    successful_results.append(result)
-                else:
-                    failed_agents.append(
-                        f"{result.agent_type.value}: {result.error_message}"
-                    )
-
             if failed_agents:
                 logger.warning(f"Some agents failed: {failed_agents}")
 
             combined_data = self._combine_agent_results(successful_results)
+            yield {
+                'type': 'agent_complete',
+                'agentId': 'validator',
+                'success': True,
+                'processingTime': round((datetime.now() - _val_start).total_seconds(), 3),
+                'tokenStats': None,
+                'timestamp': datetime.now().isoformat(),
+            }
+
+            # ── Aggregate token stats ─────────────────────────────────────────
+            from .token_logger import calculate_cost as _calc_cost
+            agent_breakdown = {}
+            total_inp = total_out = 0.0
+            for r in all_results:
+                if r.token_stats:
+                    disp = _AGENT_DISPLAY[r.agent_type]
+                    agent_breakdown[disp['id']] = r.token_stats
+                    total_inp += r.token_stats.get('promptTokens', 0)
+                    total_out += r.token_stats.get('completionTokens', 0)
+
+            combined_data['tokenStats'] = {
+                'promptTokens':     int(total_inp),
+                'completionTokens': int(total_out),
+                'totalTokens':      int(total_inp + total_out),
+                'cost':             _calc_cost(int(total_inp), int(total_out), self.client.model_id),
+                'agentBreakdown':   agent_breakdown,
+            }
 
             yield {
                 'type': 'final_data',

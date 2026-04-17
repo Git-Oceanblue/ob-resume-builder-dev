@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { FiDownload, FiPrinter } from 'react-icons/fi';
 import { Document, Packer, Paragraph, Table, TableCell, TableRow, TextRun, BorderStyle, AlignmentType, WidthType, ShadingType, VerticalAlign, LevelFormat, TabStopType, Break } from 'docx';
 import { saveAs } from 'file-saver';
@@ -43,10 +43,15 @@ const PricingDisplay = ({ resumeData }) => {
   );
 };
 
-const GeneratedResume = ({ resumeData, previewMode = false }) => {
+const GeneratedResume = React.forwardRef(({ resumeData, previewMode = false, onGoToSave }, _ref) => {
   const [isGenerating, setIsGenerating] = useState(false);
 
-  // Function to handle resume download is removed in favor of Word document generation
+  // Allow SaveStep to trigger download via custom event
+  useEffect(() => {
+    const handler = () => handleDownloadWord();
+    window.addEventListener('triggerResumeDownload', handler);
+    return () => window.removeEventListener('triggerResumeDownload', handler);
+  }); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Function to handle resume printing
   const handlePrint = () => {
@@ -1038,11 +1043,19 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
               <button
                 onClick={handleDownloadWord}
                 disabled={isGenerating}
-                className="flex items-center px-4 py-1.5 bg-white text-ocean-dark hover:bg-blue-50 rounded-lg text-xs font-bold transition-all shadow-md"
+                className="flex items-center px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white rounded-lg text-xs font-medium transition-all border border-white/20"
               >
                 <FiDownload className="mr-1.5 text-sm" />
-                {isGenerating ? 'Generating…' : 'Download Word'}
+                {isGenerating ? 'Generating…' : 'Quick Download'}
               </button>
+              {onGoToSave && (
+                <button
+                  onClick={onGoToSave}
+                  className="flex items-center px-4 py-1.5 bg-white text-ocean-dark hover:bg-blue-50 rounded-lg text-xs font-bold transition-all shadow-md"
+                >
+                  ☁️ Save & Download →
+                </button>
+              )}
             </div>
           </div>
         ) : (
@@ -1071,8 +1084,7 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
         )}
       </div>
 
-      {/* ── Pricing (preview mode only, below bar) ── */}
-      {previewMode && <PricingDisplay resumeData={resumeData} />}
+      {/* Token stats are shown in App.js via TokenDashboard above the preview */}
 
       {/* Resume Preview */}
       <div className={`bg-white print:shadow-none ${
@@ -1366,6 +1378,8 @@ const GeneratedResume = ({ resumeData, previewMode = false }) => {
 
     </div>
   );
-};
+});
+
+GeneratedResume.displayName = 'GeneratedResume';
 
 export default GeneratedResume;

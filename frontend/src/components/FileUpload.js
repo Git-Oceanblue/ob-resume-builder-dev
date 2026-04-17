@@ -5,7 +5,7 @@ import { FiUpload, FiFileText, FiAlertCircle, FiLoader, FiFile } from 'react-ico
 // API base URL - Use environment variable for production
 const API_BASE_URL = (process.env.REACT_APP_API_URL || '').replace(/\/$/, '');
 
-const FileUpload = ({ onResumeDataExtracted, setLoading }) => {
+const FileUpload = ({ onResumeDataExtracted, setLoading, onAgentEvent }) => {
   const [file, setFile] = useState(null);
   const [error, setError] = useState('');
   
@@ -113,8 +113,10 @@ const FileUpload = ({ onResumeDataExtracted, setLoading }) => {
               if (eventData === '[DONE]') continue;
               
               const data = JSON.parse(eventData);
-              
-              // Only handle final data and errors
+
+              // Emit all events to parent for agent progress display
+              if (onAgentEvent) onAgentEvent(data);
+
               if (data.type === 'final_data') {
                 const sanitizedData = sanitizeResumeData(data.data);
                 onResumeDataExtracted(sanitizedData);

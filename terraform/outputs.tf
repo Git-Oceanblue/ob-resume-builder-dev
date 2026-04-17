@@ -27,3 +27,13 @@ output "lambda_function_name" {
   description = "Lambda function name"
   value       = module.lambda.lambda_function_name
 }
+
+output "resumes_s3_bucket" {
+  description = "S3 bucket for resume storage"
+  value       = aws_s3_bucket.resumes.id
+}
+
+output "dynamodb_cache_table" {
+  description = "DynamoDB table for resume caching"
+  value       = aws_dynamodb_table.resume_cache.name
+}
