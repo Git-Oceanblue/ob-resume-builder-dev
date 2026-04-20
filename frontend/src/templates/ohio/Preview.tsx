@@ -184,7 +184,7 @@ export default function OhioPreview({ resumeData }: { resumeData: ResumeData }) 
                 )}
 
                 {job.projects?.length > 0 && job.projects.map((proj, pi) => {
-                  const title = fmtProjTitle(proj as Record<string, unknown>, pi, job.projects.length);
+                  const title = fmtProjTitle(proj as unknown as Record<string, unknown>, pi, job.projects.length);
                   return (
                     <div key={pi} className="mt-2 pl-3 border-l-2 border-[#1F497D]/20">
                       <p className="font-bold text-[10.5pt]">{title}</p>

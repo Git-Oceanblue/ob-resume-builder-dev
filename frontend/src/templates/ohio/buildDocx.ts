@@ -1,7 +1,7 @@
 import {
   Document, Packer, Paragraph, Table, TableCell, TableRow,
   TextRun, BorderStyle, AlignmentType, WidthType, ShadingType,
-  VerticalAlign, LevelFormat, TabStopType,
+  VerticalAlign, LevelFormat, TabStopType, LineRuleType, HeightRule,
 } from 'docx';
 import { saveAs } from 'file-saver';
 import type { ResumeData } from '@/types/resume';
@@ -101,7 +101,7 @@ function formatProjectTitle(proj: Record<string, unknown>, idx: number, total: n
 
 // ── DOCX builders ───────────────────────────────────────────────────────────
 
-const bodySpacing = { after: 0, line: 240, lineRule: 'auto' as const };
+const bodySpacing = { after: 0, line: 240, lineRule: LineRuleType.AUTO };
 const RIGHT_TAB   = { type: TabStopType.RIGHT, position: 10800 };
 
 const hdrTabPara = (left: string, right: string, spaceBefore = 0) =>
@@ -129,11 +129,11 @@ function buildEducationTable(data: ResumeData) {
     width: { size: w, type: WidthType.DXA },
     shading: { fill: 'D9D9D9', type: ShadingType.CLEAR },
     verticalAlign: VerticalAlign.CENTER,
-    children: [new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 0, after: 0, line: 240, lineRule: 'auto' }, children: runs })],
+    children: [new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 0, after: 0, line: 240, lineRule: LineRuleType.AUTO }, children: runs })],
   });
   const eduDataCell = (text: string) => new TableCell({
     verticalAlign: VerticalAlign.CENTER,
-    children: [new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 0, after: 0, line: 240, lineRule: 'auto' }, children: [new TextRun({ text: text || '-', font: 'Calibri', size: 22 })] })],
+    children: [new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 0, after: 0, line: 240, lineRule: LineRuleType.AUTO }, children: [new TextRun({ text: text || '-', font: 'Calibri', size: 22 })] })],
   });
 
   const sorted = sortEducation(data.education || []);
@@ -150,8 +150,8 @@ function buildEducationTable(data: ResumeData) {
       ],
     }),
     ...(sorted.length > 0
-      ? sorted.map(edu => new TableRow({ height: { value: 58, rule: 'atLeast' }, cantSplit: true, children: [eduDataCell(edu.degree), eduDataCell(edu.areaOfStudy), eduDataCell(edu.school), eduDataCell(getEdLocation(edu.location)), eduDataCell(edu.wasAwarded ? 'Yes' : 'No'), eduDataCell(edu.date)] }))
-      : [new TableRow({ height: { value: 58, rule: 'atLeast' }, cantSplit: true, children: ['-','-','-','-','-','-'].map(() => eduDataCell('-')) })]
+      ? sorted.map(edu => new TableRow({ height: { value: 58, rule: HeightRule.ATLEAST }, cantSplit: true, children: [eduDataCell(edu.degree), eduDataCell(edu.areaOfStudy), eduDataCell(edu.school), eduDataCell(getEdLocation(edu.location)), eduDataCell(edu.wasAwarded ? 'Yes' : 'No'), eduDataCell(edu.date)] }))
+      : [new TableRow({ height: { value: 58, rule: HeightRule.ATLEAST }, cantSplit: true, children: ['-','-','-','-','-','-'].map(() => eduDataCell('-')) })]
     ),
   ];
 
@@ -164,11 +164,11 @@ function buildCertificationsTable(data: ResumeData) {
     width: { size: w, type: WidthType.DXA },
     shading: { fill: 'D9D9D9', type: ShadingType.CLEAR },
     verticalAlign: VerticalAlign.CENTER,
-    children: [new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 0, after: 0, line: 240, lineRule: 'auto' }, children: runs })],
+    children: [new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 0, after: 0, line: 240, lineRule: LineRuleType.AUTO }, children: runs })],
   });
   const certDataCell = (text: string) => new TableCell({
     verticalAlign: VerticalAlign.CENTER,
-    children: [new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 0, after: 0, line: 240, lineRule: 'auto' }, children: [new TextRun({ text: text || '-', font: 'Calibri', size: 22 })] })],
+    children: [new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 0, after: 0, line: 240, lineRule: LineRuleType.AUTO }, children: [new TextRun({ text: text || '-', font: 'Calibri', size: 22 })] })],
   });
 
   const rows = [
@@ -183,8 +183,8 @@ function buildCertificationsTable(data: ResumeData) {
       ],
     }),
     ...(data.certifications?.length > 0
-      ? data.certifications.map(cert => new TableRow({ height: { value: 58, rule: 'atLeast' }, cantSplit: true, children: [certDataCell(cert.name), certDataCell(cert.issuedBy), certDataCell(cert.dateObtained), certDataCell(cert.certificationNumber), certDataCell(cert.expirationDate)] }))
-      : [new TableRow({ height: { value: 58, rule: 'atLeast' }, cantSplit: true, children: ['-','-','-','-','-'].map(() => certDataCell('-')) })]
+      ? data.certifications.map(cert => new TableRow({ height: { value: 58, rule: HeightRule.ATLEAST }, cantSplit: true, children: [certDataCell(cert.name), certDataCell(cert.issuedBy), certDataCell(cert.dateObtained), certDataCell(cert.certificationNumber), certDataCell(cert.expirationDate)] }))
+      : [new TableRow({ height: { value: 58, rule: HeightRule.ATLEAST }, cantSplit: true, children: ['-','-','-','-','-'].map(() => certDataCell('-')) })]
     ),
   ];
 
@@ -213,7 +213,7 @@ function buildEmploymentHistory(data: ResumeData): Paragraph[] {
       (job.responsibilities || []).filter(r => r.trim()).forEach(r => paras.push(bulletPara(r)));
 
       (job.projects || []).forEach((proj, pi) => {
-        const title = formatProjectTitle(proj as Record<string, unknown>, pi, job.projects.length);
+        const title = formatProjectTitle(proj as unknown as Record<string, unknown>, pi, job.projects.length);
         paras.push(new Paragraph({ alignment: AlignmentType.JUSTIFIED, spacing: bodySpacing, children: [new TextRun({ text: title, bold: true, font: 'Calibri', size: 22 })] }));
         if (proj.projectResponsibilities?.length) {
           paras.push(new Paragraph({ alignment: AlignmentType.JUSTIFIED, spacing: bodySpacing, children: [new TextRun({ text: 'Responsibilities', bold: true, font: 'Calibri', size: 22 })] }));
@@ -243,7 +243,7 @@ function buildEmploymentHistory(data: ResumeData): Paragraph[] {
 
 function buildSkills(data: ResumeData): Paragraph[] {
   const paras: Paragraph[] = [];
-  const sp = { after: 0, line: 240, lineRule: 'auto' as const };
+  const sp = { after: 0, line: 240, lineRule: LineRuleType.AUTO as const };
 
   if (data.technicalSkills && Object.keys(data.technicalSkills).length) {
     Object.entries(data.technicalSkills).forEach(([cat, skills]) => {
@@ -276,9 +276,9 @@ function buildSkills(data: ResumeData): Paragraph[] {
 
 export async function buildDocx(data: ResumeData): Promise<void> {
   const sectionHdrRun = (t: string) => new TextRun({ text: t, bold: true, size: 28, color: '1F497D', font: 'Times New Roman' });
-  const sectionHdr    = (t: string) => new Paragraph({ alignment: AlignmentType.JUSTIFIED, spacing: { after: 200, line: 276, lineRule: 'auto' }, children: [sectionHdrRun(t)] });
-  const tightHdr      = (t: string) => new Paragraph({ alignment: AlignmentType.JUSTIFIED, spacing: { after: 0, line: 240, lineRule: 'auto' }, children: [sectionHdrRun(t)] });
-  const spacer        = (after = 0) => new Paragraph({ spacing: { after, line: 240, lineRule: 'auto' }, children: [] });
+  const sectionHdr    = (t: string) => new Paragraph({ alignment: AlignmentType.JUSTIFIED, spacing: { after: 200, line: 276, lineRule: LineRuleType.AUTO }, children: [sectionHdrRun(t)] });
+  const tightHdr      = (t: string) => new Paragraph({ alignment: AlignmentType.JUSTIFIED, spacing: { after: 0, line: 240, lineRule: LineRuleType.AUTO }, children: [sectionHdrRun(t)] });
+  const spacer        = (after = 0) => new Paragraph({ spacing: { after, line: 240, lineRule: LineRuleType.AUTO }, children: [] });
 
   const doc = new Document({
     styles: {
@@ -299,7 +299,7 @@ export async function buildDocx(data: ResumeData): Promise<void> {
       properties: { page: { size: { width: 12240, height: 15840 }, margin: { top: 720, right: 720, bottom: 720, left: 720, header: 288, footer: 288, gutter: 0 } } },
       children: [
         // Name
-        new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 0, line: 240, lineRule: 'auto' }, children: [new TextRun({ text: data.name || 'Full Name', bold: true, size: 36, color: '1F497D', font: 'Times New Roman' })] }),
+        new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 0, line: 240, lineRule: LineRuleType.AUTO }, children: [new TextRun({ text: data.name || 'Full Name', bold: true, size: 36, color: '1F497D', font: 'Times New Roman' })] }),
         // Title row
         new Paragraph({ tabStops: [RIGHT_TAB], spacing: bodySpacing, children: [new TextRun({ text: 'Title/Role:', bold: true, size: 28, color: '1F497D', font: 'Times New Roman' }), new TextRun({ text: '\t' }), new TextRun({ text: 'VectorVMS Requisition Number:', bold: true, size: 28, color: '1F497D', font: 'Times New Roman' })] }),
         new Paragraph({ tabStops: [RIGHT_TAB], alignment: AlignmentType.JUSTIFIED, spacing: bodySpacing, children: [new TextRun({ text: data.title || '' }), new TextRun({ text: '\t' }), new TextRun({ text: data.requisitionNumber || '' })] }),
