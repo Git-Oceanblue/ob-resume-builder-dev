@@ -89,8 +89,7 @@ jobs:
       - name: Build frontend
         working-directory: frontend
         env:
-          REACT_APP_API_URL: ${{ steps.tf_outputs.outputs.api_url }}
-          CI: "false"
+          NEXT_PUBLIC_API_URL: ${{ steps.tf_outputs.outputs.api_url }}
         run: |
           npm install
           npm run build
@@ -100,5 +99,5 @@ jobs:
         run: |
           BUCKET=$(terraform output -raw s3_bucket_name)
           DIST_ID=$(terraform output -raw cloudfront_distribution_id)
-          aws s3 sync ../frontend/build s3://$BUCKET --delete
+          aws s3 sync ../frontend/out s3://$BUCKET --delete
           aws cloudfront create-invalidation --distribution-id "$DIST_ID" --paths "/*"

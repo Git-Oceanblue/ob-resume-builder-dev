@@ -1,49 +1,45 @@
 {
-  "name": "resumebuilder-client",
+  "name": "ob-resume-builder",
   "version": "0.1.0",
   "private": true,
-  "proxy": "http://localhost:8000",
-  "dependencies": {
-    "@testing-library/jest-dom": "^5.17.0",
-    "@testing-library/react": "^13.4.0",
-    "@testing-library/user-event": "^13.5.0",
-    "autoprefixer": "^10.4.16",
-    "axios": "^1.6.2",
-    "docx": "^8.2.3",
-    "file-saver": "^2.0.5",
-    "postcss": "^8.4.32",
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
-    "react-dropzone": "^14.2.3",
-    "react-icons": "^4.12.0",
-    "react-scripts": "5.0.1",
-    "tailwindcss": "^3.4.0"
-  },
   "scripts": {
     "dev": "next dev",
-    "start": "set PORT=3000 && react-scripts start",
-    "build": "set GENERATE_SOURCEMAP=false && react-scripts build"
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
   },
-  "eslintConfig": {
-    "extends": [
-      "react-app",
-      "react-app/jest"
-    ]
-  },
-  "browserslist": {
-    "production": [
-      ">0.2%",
-      "not dead",
-      "not op_mini all"
-    ],
-    "development": [
-      "last 1 chrome version",
-      "last 1 firefox version",
-      "last 1 safari version"
-    ]
+  "dependencies": {
+    "next": "14.2.3",
+    "react": "^18",
+    "react-dom": "^18",
+    "@radix-ui/react-accordion": "^1.1.2",
+    "@radix-ui/react-label": "^2.0.2",
+    "@radix-ui/react-progress": "^1.0.3",
+    "@radix-ui/react-scroll-area": "^1.0.5",
+    "@radix-ui/react-select": "^2.0.0",
+    "@radix-ui/react-separator": "^1.0.3",
+    "@radix-ui/react-slot": "^1.0.2",
+    "@radix-ui/react-tabs": "^1.0.4",
+    "class-variance-authority": "^0.7.0",
+    "clsx": "^2.1.1",
+    "tailwind-merge": "^2.3.0",
+    "tailwindcss-animate": "^1.0.7",
+    "lucide-react": "^0.390.0",
+    "react-dropzone": "^14.2.3",
+    "docx": "8.2.3",
+    "file-saver": "2.0.5",
+    "axios": "^1.7.2"
   },
   "devDependencies": {
-    "ajv": "^8.17.1",
-    "ajv-keywords": "^5.1.0"
+    "typescript": "^5",
+    "@types/node": "^20",
+    "@types/react": "^18",
+    "@types/react-dom": "^18",
+    "@types/file-saver": "^2.0.7",
+    "tailwindcss": "^3.4.1",
+    "autoprefixer": "^10.4.19",
+    "postcss": "^8.4.38",
+    "eslint": "^8",
+    "eslint-config-next": "14.2.3"
   }
 }
